@@ -70,6 +70,16 @@ class BleMethodChannelHandler(
                 }
             }
 
+            "broadcastData" -> {
+                val data = call.argument<ByteArray>("data")
+                if (data != null) {
+                    gattServer?.broadcastData(data)
+                    result.success(true)
+                } else {
+                    result.error("INVALID_ARGS", "data is required", null)
+                }
+            }
+
             "startForegroundService" -> {
                 val intent = Intent(context, BleForegroundService::class.java)
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {

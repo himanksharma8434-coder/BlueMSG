@@ -11,12 +11,15 @@ class EnvelopeSerializer {
   static const int _kTimestamp = 4;
   static const int _kPayload = 5;
   static const int _kSignature = 6;
+  static const int _kSenderNickname = 7;
 
   /// Encodes a MessageEnvelope into compact binary CBOR bytes.
   static Uint8List encode(MessageEnvelope envelope) {
     final map = <CborValue, CborValue>{
       CborSmallInt(_kMessageId): CborString(envelope.messageId),
       CborSmallInt(_kSenderId): CborString(envelope.senderId),
+      if (envelope.senderNickname != null)
+        CborSmallInt(_kSenderNickname): CborString(envelope.senderNickname!),
       if (envelope.recipientId != null)
         CborSmallInt(_kRecipientId): CborString(envelope.recipientId!)
       else
@@ -74,6 +77,7 @@ class EnvelopeSerializer {
     return MessageEnvelope(
       messageId: getString(_kMessageId),
       senderId: getString(_kSenderId),
+      senderNickname: getOptionalString(_kSenderNickname),
       recipientId: getOptionalString(_kRecipientId),
       ttl: getInt(_kTtl),
       timestamp: getInt(_kTimestamp),

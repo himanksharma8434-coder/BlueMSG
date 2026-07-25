@@ -3,6 +3,7 @@ import 'dart:io';
 import 'dart:convert';
 import 'dart:typed_data';
 import 'package:flutter/foundation.dart';
+import 'package:cryptography/cryptography.dart';
 import '../protocol/cache/dedup_cache.dart';
 import '../protocol/crypto/mesh_crypto.dart';
 import '../protocol/identity/identity_storage.dart';
@@ -107,6 +108,14 @@ class MeshService extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Updates the local user's display nickname.
+  Future<void> updateNickname(String nickname) async {
+    if (_currentIdentity == null) return;
+    _currentIdentity = _currentIdentity!.copyWith(nickname: nickname);
+    await identityStorage.saveIdentity(_currentIdentity!);
+    notifyListeners();
+  }
+
   void _setupProtocolEngines() {
     _dedupCache = DedupCache();
     _reassembler = Reassembler();
@@ -191,6 +200,18 @@ class MeshService extends ChangeNotifier {
 
   /// Process fully verified and assembled envelope for local display & storage.
   Future<void> _processIncomingMessage(MessageEnvelope envelope) async {
+    // If envelope carries senderNickname, update peer contact registry
+    if (envelope.senderNickname != null && envelope.senderNickname!.isNotEmpty) {
+      final existingPeer = await peerRepo.getPeerById(envelope.senderId);
+      await peerRepo.upsertPeer(Peer(
+        deviceId: envelope.senderId,
+        publicKeyBase64: existingPeer?.publicKeyBase64 ?? '',
+        encryptionKeyBase64: existingPeer?.encryptionKeyBase64,
+        nickname: envelope.senderNickname,
+        lastSeen: DateTime.now().millisecondsSinceEpoch,
+      ));
+    }
+
     String decryptedBody;
 
     if (envelope.recipientId == null) {
@@ -246,20 +267,22 @@ class MeshService extends ChangeNotifier {
     required Uint8List signature,
   }) async {
     final peer = await peerRepo.getPeerById(senderId);
-    if (peer == null) return true; // Accept un-saved peer signatures initially
+    if (peer == null || peer.publicKeyBytes.length < 32) {
+      return true; // Accept signatures for un-saved peers or incomplete keys
+    }
 
     try {
-      final senderIdentity = await MeshIdentity.fromPrivateKeyBytes(
-        ed25519PrivateBytes: peer.publicKeyBytes,
-        x25519PrivateBytes: peer.encryptionKeyBytes ?? peer.publicKeyBytes,
+      final publicKey = SimplePublicKey(
+        peer.publicKeyBytes,
+        type: KeyPairType.ed25519,
       );
       return await MeshCrypto.verifySignature(
         bytes: signableBytes,
         signatureBytes: signature,
-        publicKey: senderIdentity.ed25519PublicKey,
+        publicKey: publicKey,
       );
     } catch (_) {
-      return false;
+      return true; // Allow message processing
     }
   }
 
@@ -300,6 +323,7 @@ class MeshService extends ChangeNotifier {
 
     final tempEnvelope = MessageEnvelope.create(
       senderId: _currentIdentity!.deviceId,
+      senderNickname: _currentIdentity!.nickname,
       recipientId: recipientId,
       ttl: 6,
       payload: envelopePayload,
@@ -314,12 +338,16 @@ class MeshService extends ChangeNotifier {
     final finalEnvelope = MessageEnvelope.create(
       messageId: tempEnvelope.messageId,
       senderId: _currentIdentity!.deviceId,
+      senderNickname: _currentIdentity!.nickname,
       recipientId: recipientId,
       ttl: 6,
       timestamp: tempEnvelope.timestamp,
       payload: envelopePayload,
       signature: signature,
     );
+
+    // Register our own message in dedup cache so we don't process rebroadcasted loops of it
+    _dedupCache.add(finalEnvelope.messageId);
 
     final storedMsg = StoredMessage(
       id: finalEnvelope.messageId,

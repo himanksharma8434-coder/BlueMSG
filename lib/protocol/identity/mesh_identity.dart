@@ -1,15 +1,15 @@
-import 'dart:convert';
 import 'dart:typed_data';
 import 'package:crypto/crypto.dart' as crypto;
 import 'package:cryptography/cryptography.dart';
 
-/// Represents a device's cryptographic identity (Ed25519 signing keypair + X25519 keypair).
+/// Represents a device's cryptographic identity (Ed25519 signing keypair + X25519 keypair + optional nickname).
 class MeshIdentity {
   final SimpleKeyPair ed25519KeyPair;
   final SimpleKeyPair x25519KeyPair;
   final SimplePublicKey ed25519PublicKey;
   final SimplePublicKey x25519PublicKey;
   final String deviceId;
+  final String? nickname;
 
   MeshIdentity._({
     required this.ed25519KeyPair,
@@ -17,10 +17,22 @@ class MeshIdentity {
     required this.ed25519PublicKey,
     required this.x25519PublicKey,
     required this.deviceId,
+    this.nickname,
   });
 
+  MeshIdentity copyWith({String? nickname}) {
+    return MeshIdentity._(
+      ed25519KeyPair: ed25519KeyPair,
+      x25519KeyPair: x25519KeyPair,
+      ed25519PublicKey: ed25519PublicKey,
+      x25519PublicKey: x25519PublicKey,
+      deviceId: deviceId,
+      nickname: nickname ?? this.nickname,
+    );
+  }
+
   /// Generates a new random cryptographic identity.
-  static Future<MeshIdentity> generate() async {
+  static Future<MeshIdentity> generate({String? nickname}) async {
     final ed25519 = Ed25519();
     final x25519 = X25519();
 
@@ -38,6 +50,7 @@ class MeshIdentity {
       ed25519PublicKey: edPub,
       x25519PublicKey: xPub,
       deviceId: deviceId,
+      nickname: nickname,
     );
   }
 
@@ -45,6 +58,7 @@ class MeshIdentity {
   static Future<MeshIdentity> fromPrivateKeyBytes({
     required Uint8List ed25519PrivateBytes,
     required Uint8List x25519PrivateBytes,
+    String? nickname,
   }) async {
     final ed25519 = Ed25519();
     final x25519 = X25519();
@@ -63,6 +77,7 @@ class MeshIdentity {
       ed25519PublicKey: edPub,
       x25519PublicKey: xPub,
       deviceId: deviceId,
+      nickname: nickname,
     );
   }
 
@@ -86,5 +101,5 @@ class MeshIdentity {
   }
 
   @override
-  String toString() => 'MeshIdentity(deviceId: $deviceId)';
+  String toString() => 'MeshIdentity(deviceId: $deviceId, nickname: $nickname)';
 }

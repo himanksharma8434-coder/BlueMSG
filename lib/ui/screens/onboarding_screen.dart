@@ -17,6 +17,7 @@ class OnboardingScreen extends StatefulWidget {
 }
 
 class _OnboardingScreenState extends State<OnboardingScreen> {
+  final TextEditingController _nicknameController = TextEditingController();
   MeshIdentity? _generatedIdentity;
   bool _isGenerating = true;
 
@@ -24,6 +25,12 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   void initState() {
     super.initState();
     _generateIdentity();
+  }
+
+  @override
+  void dispose() {
+    _nicknameController.dispose();
+    super.dispose();
   }
 
   Future<void> _generateIdentity() async {
@@ -38,7 +45,14 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
 
   Future<void> _completeOnboarding() async {
     if (_generatedIdentity == null) return;
-    await widget.meshService.setIdentity(_generatedIdentity!);
+    final nicknameText = _nicknameController.text.trim();
+    final nickname = nicknameText.isNotEmpty
+        ? nicknameText
+        : 'User-${_generatedIdentity!.deviceId.substring(0, 4)}';
+
+    final updatedIdentity = _generatedIdentity!.copyWith(nickname: nickname);
+    await widget.meshService.setIdentity(updatedIdentity);
+
     if (mounted) {
       Navigator.of(context).pushReplacement(
         MaterialPageRoute(
@@ -56,47 +70,46 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
           padding: const EdgeInsets.all(24.0),
           child: Column(
             children: [
-              const SizedBox(height: 20),
+              const SizedBox(height: 12),
               // App Icon / Logo
               Container(
-                width: 72,
-                height: 72,
+                width: 64,
+                height: 64,
                 decoration: BoxDecoration(
                   gradient: AppTheme.primaryGradient,
-                  borderRadius: BorderRadius.circular(20),
+                  borderRadius: BorderRadius.circular(18),
                 ),
                 child: const Icon(
                   Icons.hub_rounded,
-                  size: 40,
+                  size: 36,
                   color: Colors.black,
                 ),
               ),
-              const SizedBox(height: 20),
+              const SizedBox(height: 12),
               const Text(
                 'Welcome to bitmsg',
                 style: TextStyle(
-                  fontSize: 28,
+                  fontSize: 26,
                   fontWeight: FontWeight.bold,
                   color: Colors.white,
                 ),
               ),
-              const SizedBox(height: 8),
+              const SizedBox(height: 4),
               Text(
-                '100% Offline Bluetooth Mesh Messaging.\nNo internet, accounts, or central servers required.',
+                '100% Offline Bluetooth Mesh Messaging.',
                 textAlign: TextAlign.center,
                 style: TextStyle(
-                  fontSize: 14,
+                  fontSize: 13,
                   color: Colors.grey[400],
-                  height: 1.4,
                 ),
               ),
-              const SizedBox(height: 32),
+              const SizedBox(height: 20),
 
               // Identity QR Code & Details Card
               Expanded(
                 child: Container(
                   width: double.infinity,
-                  padding: const EdgeInsets.all(24),
+                  padding: const EdgeInsets.all(20),
                   decoration: BoxDecoration(
                     color: AppTheme.surface,
                     borderRadius: BorderRadius.circular(24),
@@ -111,18 +124,31 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                             mainAxisAlignment: MainAxisAlignment.center,
                             children: [
                               const Text(
-                                'YOUR MESH IDENTITY',
+                                'CHOOSE YOUR DISPLAY USERNAME',
                                 style: TextStyle(
-                                  fontSize: 12,
+                                  fontSize: 11,
                                   fontWeight: FontWeight.bold,
                                   color: AppTheme.primaryCyan,
                                   letterSpacing: 1.2,
                                 ),
                               ),
+                              const SizedBox(height: 12),
+
+                              // Username Input Field
+                              TextField(
+                                controller: _nicknameController,
+                                decoration: InputDecoration(
+                                  hintText: 'Enter nickname (e.g. Alice)',
+                                  prefixIcon: const Icon(Icons.person_outline, color: AppTheme.primaryCyan),
+                                  hintStyle: TextStyle(color: Colors.grey[500], fontSize: 14),
+                                ),
+                                style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold),
+                              ),
                               const SizedBox(height: 16),
+
                               // QR Code container
                               Container(
-                                padding: const EdgeInsets.all(12),
+                                padding: const EdgeInsets.all(10),
                                 decoration: BoxDecoration(
                                   color: Colors.white,
                                   borderRadius: BorderRadius.circular(16),
@@ -130,14 +156,15 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                                 child: QrImageView(
                                   data: _generatedIdentity!.deviceId,
                                   version: QrVersions.auto,
-                                  size: 140.0,
+                                  size: 130.0,
                                 ),
                               ),
-                              const SizedBox(height: 16),
+                              const SizedBox(height: 14),
+
                               // Device ID pill
                               Container(
                                 padding: const EdgeInsets.symmetric(
-                                    horizontal: 16, vertical: 8),
+                                    horizontal: 14, vertical: 6),
                                 decoration: BoxDecoration(
                                   color: AppTheme.surfaceLight,
                                   borderRadius: BorderRadius.circular(30),
@@ -147,20 +174,20 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                                   mainAxisSize: MainAxisSize.min,
                                   children: [
                                     const Icon(Icons.fingerprint,
-                                        size: 18, color: AppTheme.accentMint),
-                                    const SizedBox(width: 8),
+                                        size: 16, color: AppTheme.accentMint),
+                                    const SizedBox(width: 6),
                                     Text(
                                       _generatedIdentity!.deviceId,
                                       style: const TextStyle(
                                         fontFamily: 'monospace',
-                                        fontSize: 15,
+                                        fontSize: 14,
                                         fontWeight: FontWeight.bold,
                                         color: Colors.white,
                                       ),
                                     ),
-                                    const SizedBox(width: 8),
+                                    const SizedBox(width: 6),
                                     IconButton(
-                                      icon: const Icon(Icons.copy, size: 16),
+                                      icon: const Icon(Icons.copy, size: 14),
                                       onPressed: () {
                                         Clipboard.setData(ClipboardData(
                                           text: _generatedIdentity!.deviceId,
@@ -177,39 +204,30 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                                   ],
                                 ),
                               ),
-                              const SizedBox(height: 12),
-                              Text(
-                                'Cryptographic keypair derived locally.\nShare this ID or QR code with nearby contacts.',
-                                textAlign: TextAlign.center,
-                                style: TextStyle(
-                                  fontSize: 12,
-                                  color: Colors.grey[500],
-                                ),
-                              ),
                             ],
                           ),
                         ),
                 ),
               ),
 
-              const SizedBox(height: 24),
+              const SizedBox(height: 20),
 
               // Get Started Button
               SizedBox(
                 width: double.infinity,
-                height: 54,
+                height: 52,
                 child: ElevatedButton(
                   onPressed: _isGenerating ? null : _completeOnboarding,
                   style: ElevatedButton.styleFrom(
                     padding: EdgeInsets.zero,
                     shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(27),
+                      borderRadius: BorderRadius.circular(26),
                     ),
                   ),
                   child: Ink(
                     decoration: BoxDecoration(
                       gradient: AppTheme.primaryGradient,
-                      borderRadius: BorderRadius.circular(27),
+                      borderRadius: BorderRadius.circular(26),
                     ),
                     child: Container(
                       alignment: Alignment.center,

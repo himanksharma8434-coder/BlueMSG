@@ -176,11 +176,12 @@ class BleGattServer(private val context: Context) {
             .build()
 
         val data = AdvertiseData.Builder()
-            .setIncludeDeviceName(true)
+            .setIncludeDeviceName(false) // Must be false so 128-bit UUID fits within 31-byte BLE limit!
             .addServiceUuid(ParcelUuid(SERVICE_UUID))
             .build()
 
         val scanResponse = AdvertiseData.Builder()
+            .setIncludeDeviceName(true) // Include device name in scan response packet
             .setIncludeTxPowerLevel(true)
             .build()
 

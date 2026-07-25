@@ -48,39 +48,92 @@ class _ConversationListScreenState extends State<ConversationListScreen> {
     }
   }
 
+  void _editNicknameDialog() {
+    final controller = TextEditingController(
+      text: widget.meshService.currentIdentity?.nickname ?? '',
+    );
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppTheme.surface,
+        title: const Text('Edit Your Username'),
+        content: TextField(
+          controller: controller,
+          decoration: const InputDecoration(
+            hintText: 'Enter new display name',
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () async {
+              final newName = controller.text.trim();
+              if (newName.isNotEmpty) {
+                await widget.meshService.updateNickname(newName);
+              }
+              if (mounted) Navigator.pop(ctx);
+            },
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final myId = widget.meshService.currentIdentity?.deviceId ?? '----';
+    final myNickname = widget.meshService.currentIdentity?.nickname ?? 'User-${myId.substring(0, 4)}';
     final nearbyCount = widget.meshService.nearbyPeers.length;
 
     return Scaffold(
       appBar: AppBar(
-        title: Row(
-          children: [
-            Container(
-              padding: const EdgeInsets.all(8),
-              decoration: BoxDecoration(
-                gradient: AppTheme.primaryGradient,
-                borderRadius: BorderRadius.circular(12),
-              ),
-              child: const Icon(Icons.hub_rounded, color: Colors.black, size: 20),
-            ),
-            const SizedBox(width: 12),
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text('bitmsg'),
-                Text(
-                  'ID: $myId',
-                  style: TextStyle(
-                    fontSize: 12,
-                    fontFamily: 'monospace',
-                    color: Colors.grey[400],
-                  ),
+        title: GestureDetector(
+          onTap: _editNicknameDialog,
+          child: Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  gradient: AppTheme.primaryGradient,
+                  borderRadius: BorderRadius.circular(12),
                 ),
-              ],
-            ),
-          ],
+                child: const Icon(Icons.hub_rounded, color: Colors.black, size: 20),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Flexible(
+                          child: Text(
+                            myNickname,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                          ),
+                        ),
+                        const SizedBox(width: 4),
+                        const Icon(Icons.edit, size: 12, color: AppTheme.primaryCyan),
+                      ],
+                    ),
+                    Text(
+                      'ID: $myId',
+                      style: TextStyle(
+                        fontSize: 11,
+                        fontFamily: 'monospace',
+                        color: Colors.grey[400],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
         ),
         actions: [
           IconButton(

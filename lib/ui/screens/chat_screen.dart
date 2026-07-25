@@ -58,12 +58,24 @@ class _ChatScreenState extends State<ChatScreen> {
     _loadHistory();
   }
 
+  final Map<String, String> _peerNicknames = {};
+
   Future<void> _loadHistory() async {
     final history = await widget.meshService.messageRepo
         .getConversationHistory(widget.conversationId);
+    final peers = await widget.meshService.peerRepo.getAllPeers();
+    final nicknameMap = <String, String>{};
+    for (final p in peers) {
+      if (p.nickname != null && p.nickname!.isNotEmpty) {
+        nicknameMap[p.deviceId] = p.nickname!;
+      }
+    }
+
     if (mounted) {
       setState(() {
         _messages = history;
+        _peerNicknames.clear();
+        _peerNicknames.addAll(nicknameMap);
         _isLoading = false;
       });
     }
@@ -256,12 +268,11 @@ class _ChatScreenState extends State<ChatScreen> {
               Padding(
                 padding: const EdgeInsets.only(bottom: 4),
                 child: Text(
-                  'Sender: ${msg.senderId}',
+                  _peerNicknames[msg.senderId] ?? 'User-${msg.senderId.substring(0, 4)}',
                   style: const TextStyle(
-                    fontSize: 10,
+                    fontSize: 11,
                     fontWeight: FontWeight.bold,
                     color: AppTheme.primaryPurple,
-                    fontFamily: 'monospace',
                   ),
                 ),
               ),

@@ -147,13 +147,22 @@ class AndroidBleTransport implements Transport {
         onError: (_) {},
       );
 
-      // Start scan filtering by service UUID
-      await FlutterBluePlus.startScan(
-        withServices: [Guid(BleConstants.serviceUuid)],
-        androidUsesFineLocation: true,
-        continuousUpdates: true,
-        continuousDivisor: 1,
-      );
+      // Start BLE scan (try filtering by service UUID first, then un-filtered for maximum compatibility)
+      try {
+        await FlutterBluePlus.startScan(
+          withServices: [Guid(BleConstants.serviceUuid)],
+          androidUsesFineLocation: true,
+          continuousUpdates: true,
+          continuousDivisor: 1,
+        );
+      } catch (_) {
+        // Fallback to unfiltered scan if hardware filter fails
+        await FlutterBluePlus.startScan(
+          androidUsesFineLocation: true,
+          continuousUpdates: true,
+          continuousDivisor: 1,
+        );
+      }
     } catch (_) {}
   }
 
@@ -256,7 +265,12 @@ class AndroidBleTransport implements Transport {
 
   @override
   Future<void> broadcast(Uint8List data) async {
-    // Send to all connected peers
+    // 1. Broadcast via native peripheral GATT server (notifies all connected centrals)
+    try {
+      await _methodChannel.invokeMethod('broadcastData', {'data': data});
+    } catch (_) {}
+
+    // 2. Send to all connected central-mode devices
     final peers = List<String>.from(_connectedPeers);
     for (final peerId in peers) {
       try {

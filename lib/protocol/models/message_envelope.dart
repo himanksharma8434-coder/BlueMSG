@@ -5,6 +5,7 @@ import 'package:uuid/uuid.dart';
 class MessageEnvelope {
   final String messageId;
   final String senderId;
+  final String? senderNickname;
   final String? recipientId;
   final int ttl;
   final int timestamp;
@@ -14,6 +15,7 @@ class MessageEnvelope {
   const MessageEnvelope({
     required this.messageId,
     required this.senderId,
+    this.senderNickname,
     this.recipientId,
     this.ttl = 6,
     required this.timestamp,
@@ -24,6 +26,7 @@ class MessageEnvelope {
   /// Factory to generate a new envelope with a unique UUID v4 ID and current timestamp.
   factory MessageEnvelope.create({
     required String senderId,
+    String? senderNickname,
     String? recipientId,
     int ttl = 6,
     required Uint8List payload,
@@ -34,6 +37,7 @@ class MessageEnvelope {
     return MessageEnvelope(
       messageId: messageId ?? const Uuid().v4(),
       senderId: senderId,
+      senderNickname: senderNickname,
       recipientId: recipientId,
       ttl: ttl,
       timestamp: timestamp ?? DateTime.now().millisecondsSinceEpoch,
@@ -47,6 +51,7 @@ class MessageEnvelope {
     return MessageEnvelope(
       messageId: messageId,
       senderId: senderId,
+      senderNickname: senderNickname,
       recipientId: recipientId,
       ttl: ttl > 0 ? ttl - 1 : 0,
       timestamp: timestamp,
@@ -56,20 +61,23 @@ class MessageEnvelope {
   }
 
   /// Utility to get bytes to sign or verify signature against.
-  /// Standardized format: messageId | senderId | recipientId | ttl | timestamp | payload
+  /// Standardized format: messageId | senderId | senderNickname | recipientId | ttl | timestamp | payload
   Uint8List getSignableBytes() {
     final builder = BytesBuilder();
     builder.add(Uint8List.fromList(messageId.codeUnits));
     builder.add(Uint8List.fromList(senderId.codeUnits));
+    if (senderNickname != null) {
+      builder.add(Uint8List.fromList(senderNickname!.codeUnits));
+    }
     if (recipientId != null) {
       builder.add(Uint8List.fromList(recipientId!.codeUnits));
     }
     final ttlByte = Uint8List(1)..[0] = ttl & 0xFF;
     builder.add(ttlByte);
-    
+
     final tsBytes = ByteData(8)..setInt64(0, timestamp, Endian.big);
     builder.add(tsBytes.buffer.asUint8List());
-    
+
     builder.add(payload);
     return builder.toBytes();
   }
@@ -80,6 +88,7 @@ class MessageEnvelope {
     return other is MessageEnvelope &&
         other.messageId == messageId &&
         other.senderId == senderId &&
+        other.senderNickname == senderNickname &&
         other.recipientId == recipientId &&
         other.ttl == ttl &&
         other.timestamp == timestamp &&
@@ -92,6 +101,7 @@ class MessageEnvelope {
     return Object.hash(
       messageId,
       senderId,
+      senderNickname,
       recipientId,
       ttl,
       timestamp,
@@ -110,6 +120,6 @@ class MessageEnvelope {
 
   @override
   String toString() {
-    return 'MessageEnvelope(id: $messageId, sender: $senderId, recipient: $recipientId, ttl: $ttl, timestamp: $timestamp, payloadLength: ${payload.length})';
+    return 'MessageEnvelope(id: $messageId, sender: $senderId, nickname: $senderNickname, recipient: $recipientId, ttl: $ttl, timestamp: $timestamp, payloadLength: ${payload.length})';
   }
 }

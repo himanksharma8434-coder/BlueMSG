@@ -1,5 +1,4 @@
 import 'dart:convert';
-import 'dart:typed_data';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'mesh_identity.dart';
 
@@ -13,6 +12,7 @@ abstract class IdentityStorageInterface {
 class SecureIdentityStorage implements IdentityStorageInterface {
   static const String _kEd25519Key = 'bitmsg_ed25519_priv';
   static const String _kX25519Key = 'bitmsg_x25519_priv';
+  static const String _kNicknameKey = 'bitmsg_nickname';
 
   final FlutterSecureStorage _storage;
 
@@ -23,6 +23,7 @@ class SecureIdentityStorage implements IdentityStorageInterface {
   Future<MeshIdentity?> loadIdentity() async {
     final edBase64 = await _storage.read(key: _kEd25519Key);
     final xBase64 = await _storage.read(key: _kX25519Key);
+    final nickname = await _storage.read(key: _kNicknameKey);
 
     if (edBase64 == null || xBase64 == null) {
       return null;
@@ -34,6 +35,7 @@ class SecureIdentityStorage implements IdentityStorageInterface {
     return MeshIdentity.fromPrivateKeyBytes(
       ed25519PrivateBytes: edBytes,
       x25519PrivateBytes: xBytes,
+      nickname: nickname,
     );
   }
 
@@ -44,12 +46,16 @@ class SecureIdentityStorage implements IdentityStorageInterface {
 
     await _storage.write(key: _kEd25519Key, value: base64Encode(edBytes));
     await _storage.write(key: _kX25519Key, value: base64Encode(xBytes));
+    if (identity.nickname != null) {
+      await _storage.write(key: _kNicknameKey, value: identity.nickname!);
+    }
   }
 
   @override
   Future<void> clearIdentity() async {
     await _storage.delete(key: _kEd25519Key);
     await _storage.delete(key: _kX25519Key);
+    await _storage.delete(key: _kNicknameKey);
   }
 }
 
@@ -57,6 +63,7 @@ class SecureIdentityStorage implements IdentityStorageInterface {
 class InMemoryIdentityStorage implements IdentityStorageInterface {
   String? _edBase64;
   String? _xBase64;
+  String? _nickname;
 
   @override
   Future<MeshIdentity?> loadIdentity() async {
@@ -64,6 +71,7 @@ class InMemoryIdentityStorage implements IdentityStorageInterface {
     return MeshIdentity.fromPrivateKeyBytes(
       ed25519PrivateBytes: base64Decode(_edBase64!),
       x25519PrivateBytes: base64Decode(_xBase64!),
+      nickname: _nickname,
     );
   }
 
@@ -71,11 +79,13 @@ class InMemoryIdentityStorage implements IdentityStorageInterface {
   Future<void> saveIdentity(MeshIdentity identity) async {
     _edBase64 = base64Encode(await identity.getEd25519PrivateBytes());
     _xBase64 = base64Encode(await identity.getX25519PrivateBytes());
+    _nickname = identity.nickname;
   }
 
   @override
   Future<void> clearIdentity() async {
     _edBase64 = null;
     _xBase64 = null;
+    _nickname = null;
   }
 }
