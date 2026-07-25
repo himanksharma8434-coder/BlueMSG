@@ -113,7 +113,7 @@ void main() {
         mockTransport.simulateIncomingData(senderIdentity.deviceId, chunk.toBytes());
       }
 
-      await Future.delayed(const Duration(milliseconds: 50));
+      await Future.delayed(const Duration(milliseconds: 200));
 
       final history = await meshService.messageRepo.getConversationHistory(senderIdentity.deviceId);
       expect(history.length, equals(1));

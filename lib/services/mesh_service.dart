@@ -126,26 +126,38 @@ class MeshService extends ChangeNotifier {
     );
   }
 
+  bool _transportStarted = false;
+  final List<StreamSubscription> _transportSubs = [];
+
   Future<void> _startMeshTransport() async {
+    if (_transportStarted) {
+      // Already listening — just restart scan/advertise
+      await transport.stopScanning();
+      await transport.startAdvertising();
+      await transport.startScanning();
+      return;
+    }
+    _transportStarted = true;
+
     // Transport incoming data listener
-    transport.incomingData.listen(_handleIncomingBleData);
+    _transportSubs.add(transport.incomingData.listen(_handleIncomingBleData));
 
     // Peer discovered listener
-    transport.peerDiscovered.listen((peer) {
+    _transportSubs.add(transport.peerDiscovered.listen((peer) {
       _activePeers[peer.peerId] = peer;
       _nearbyPeersCtrl.add(_activePeers.values.toList());
 
       // Attempt store-and-forward outbox delivery
       _flushPendingMessagesForPeer(peer.peerId);
       notifyListeners();
-    });
+    }));
 
     // Peer lost listener
-    transport.peerLost.listen((peerId) {
+    _transportSubs.add(transport.peerLost.listen((peerId) {
       _activePeers.remove(peerId);
       _nearbyPeersCtrl.add(_activePeers.values.toList());
       notifyListeners();
-    });
+    }));
 
     // Start BLE scanning and advertising
     await transport.startAdvertising();
@@ -403,6 +415,7 @@ class MeshService extends ChangeNotifier {
         } else {
           await transport.broadcast(chunk.toBytes());
         }
+        await Future.delayed(const Duration(milliseconds: 12));
       }
       await messageRepo.updateStatus(finalEnvelope.messageId, DeliveryStatus.sent);
     } else {

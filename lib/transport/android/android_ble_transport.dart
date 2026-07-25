@@ -275,8 +275,21 @@ class AndroidBleTransport implements Transport {
       await _writeViaPeripheral(peerId, data);
     } catch (_) {}
 
-    // 3. Mesh Routing / Relaying: Broadcast packet to all connected BLE devices so intended recipient or relays receive it
-    await broadcast(data);
+    // 3. Flood to all connected BLE links (the recipient's deviceId won't match any MAC,
+    //    so we push the envelope to every link and let the protocol layer filter)
+    try {
+      await _methodChannel.invokeMethod('broadcastData', {'data': data});
+    } catch (_) {}
+
+    final peers = List<String>.from(_connectedPeers);
+    for (final pid in peers) {
+      final dev = _fbpDevices[pid];
+      if (dev != null) {
+        try {
+          await _writeViaCentral(dev, data);
+        } catch (_) {}
+      }
+    }
   }
 
   @override
@@ -286,13 +299,14 @@ class AndroidBleTransport implements Transport {
       await _methodChannel.invokeMethod('broadcastData', {'data': data});
     } catch (_) {}
 
-    // 2. Send to all connected central-mode devices
+    // 2. Write to all connected central-mode devices directly (no recursion)
     final peers = List<String>.from(_connectedPeers);
     for (final peerId in peers) {
-      try {
-        await send(peerId, data);
-      } catch (_) {
-        // Best-effort broadcast — skip failed peers
+      final device = _fbpDevices[peerId];
+      if (device != null) {
+        try {
+          await _writeViaCentral(device, data);
+        } catch (_) {}
       }
     }
   }

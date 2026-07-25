@@ -8,7 +8,7 @@ class Chunker {
   static List<MessageChunk> chunkEnvelope({
     required String messageId,
     required Uint8List payloadBytes,
-    int maxChunkPayloadSize = 180,
+    int maxChunkPayloadSize = 90,
   }) {
     if (payloadBytes.isEmpty) {
       return [
