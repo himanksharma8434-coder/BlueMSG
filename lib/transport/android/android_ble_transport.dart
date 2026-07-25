@@ -137,7 +137,6 @@ class AndroidBleTransport implements Transport {
       final hasPermission = await requestPermissions();
       if (!hasPermission) return;
 
-      // Continuous scan with the mesh service UUID filter
       _scanSubscription?.cancel();
       _scanSubscription = FlutterBluePlus.onScanResults.listen(
         (results) {
@@ -148,15 +147,14 @@ class AndroidBleTransport implements Transport {
         onError: (_) {},
       );
 
+      // Start scan filtering by service UUID
       await FlutterBluePlus.startScan(
         withServices: [Guid(BleConstants.serviceUuid)],
         androidUsesFineLocation: true,
         continuousUpdates: true,
         continuousDivisor: 1,
       );
-    } catch (_) {
-      // Gracefully handle scan start errors (e.g., Bluetooth turned off)
-    }
+    } catch (_) {}
   }
 
   @override
@@ -172,18 +170,28 @@ class AndroidBleTransport implements Transport {
     final device = result.device;
     final peerId = device.remoteId.str;
 
-    if (!_connectedPeers.contains(peerId)) {
+    // Discover peer if not already connected or update RSSI
+    final isNewPeer = !_connectedPeers.contains(peerId);
+    if (isNewPeer) {
       _connectedPeers.add(peerId);
       _fbpDevices[peerId] = device;
       _peerDiscoveredCtrl.add(DiscoveredPeer(
         peerId: peerId,
-        name: device.platformName.isNotEmpty ? device.platformName : null,
+        name: device.platformName.isNotEmpty ? device.platformName : 'bitmsg Peer (${peerId.substring(0, 4)})',
         rssi: result.rssi,
         discoveredAt: DateTime.now(),
       ));
 
-      // Auto-connect and discover services
+      // Auto-connect and discover GATT services
       _connectAndDiscover(device, peerId);
+    } else {
+      // Update RSSI and timestamp for active peer
+      _peerDiscoveredCtrl.add(DiscoveredPeer(
+        peerId: peerId,
+        name: device.platformName.isNotEmpty ? device.platformName : 'bitmsg Peer (${peerId.substring(0, 4)})',
+        rssi: result.rssi,
+        discoveredAt: DateTime.now(),
+      ));
     }
   }
 

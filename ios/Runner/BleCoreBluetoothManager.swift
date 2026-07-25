@@ -17,9 +17,9 @@ class BleCoreBluetoothManager: NSObject {
     
     // MARK: - Constants
     
-    static let serviceUUID = CBUUID(string: "B1TM5G00-4D65-7368-4E65-74776F726B00")
-    static let writeCharUUID = CBUUID(string: "B1TM5G01-4D65-7368-4E65-74776F726B00")
-    static let notifyCharUUID = CBUUID(string: "B1TM5G02-4D65-7368-4E65-74776F726B00")
+    static let serviceUUID = CBUUID(string: "6269746d-7367-4000-8000-000000000001")
+    static let writeCharUUID = CBUUID(string: "6269746d-7367-4000-8000-000000000002")
+    static let notifyCharUUID = CBUUID(string: "6269746d-7367-4000-8000-000000000003")
     static let centralRestoreId = "com.bitmsg.central"
     static let peripheralRestoreId = "com.bitmsg.peripheral"
     

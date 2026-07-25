@@ -14,6 +14,17 @@ class BlePermissionHandler {
     }
   }
 
+  /// Check if Android Location Services (GPS toggle) is enabled.
+  static Future<bool> isLocationServiceEnabled() async {
+    if (!Platform.isAndroid) return true;
+    try {
+      final status = await Permission.location.serviceStatus;
+      return status.isEnabled;
+    } catch (_) {
+      return true;
+    }
+  }
+
   /// Request the user to turn on Bluetooth.
   static Future<void> requestBluetoothOn() async {
     if (Platform.isAndroid) {

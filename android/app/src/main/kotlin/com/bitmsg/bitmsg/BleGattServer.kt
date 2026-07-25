@@ -17,9 +17,9 @@ import java.util.UUID
 class BleGattServer(private val context: Context) {
     companion object {
         private const val TAG = "BleGattServer"
-        val SERVICE_UUID: UUID = UUID.fromString("b1tm5g00-4d65-7368-4e65-74776f726b00")
-        val WRITE_CHAR_UUID: UUID = UUID.fromString("b1tm5g01-4d65-7368-4e65-74776f726b00")
-        val NOTIFY_CHAR_UUID: UUID = UUID.fromString("b1tm5g02-4d65-7368-4e65-74776f726b00")
+        val SERVICE_UUID: UUID = UUID.fromString("6269746d-7367-4000-8000-000000000001")
+        val WRITE_CHAR_UUID: UUID = UUID.fromString("6269746d-7367-4000-8000-000000000002")
+        val NOTIFY_CHAR_UUID: UUID = UUID.fromString("6269746d-7367-4000-8000-000000000003")
         val CCCD_UUID: UUID = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
     }
 
@@ -176,12 +176,12 @@ class BleGattServer(private val context: Context) {
             .build()
 
         val data = AdvertiseData.Builder()
-            .setIncludeDeviceName(false) // Save space in advertisement
+            .setIncludeDeviceName(true)
             .addServiceUuid(ParcelUuid(SERVICE_UUID))
             .build()
 
         val scanResponse = AdvertiseData.Builder()
-            .setIncludeDeviceName(true)
+            .setIncludeTxPowerLevel(true)
             .build()
 
         advertiser?.startAdvertising(settings, data, scanResponse, advertiseCallback)
