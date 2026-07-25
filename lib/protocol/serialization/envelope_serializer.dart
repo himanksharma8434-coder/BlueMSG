@@ -37,7 +37,7 @@ class EnvelopeSerializer {
       throw const FormatException('Invalid CBOR data: expected CborMap');
     }
 
-    final map = decoded.map;
+    final CborMap map = decoded;
 
     String? getOptionalString(int key) {
       final value = map[CborSmallInt(key)];

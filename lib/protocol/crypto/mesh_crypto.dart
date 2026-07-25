@@ -6,7 +6,7 @@ import '../identity/mesh_identity.dart';
 class MeshCrypto {
   static final Ed25519 _ed25519 = Ed25519();
   static final X25519 _x25519 = X25519();
-  static final Chacha20Poly1305Aead _cipher = Chacha20Poly1305Aead();
+  static final Cipher _cipher = Chacha20.poly1305Aead();
 
   /// Signs raw bytes using an Ed25519 keypair.
   static Future<Uint8List> signBytes({
@@ -43,14 +43,9 @@ class MeshCrypto {
       remotePublicKey: recipientX25519PublicKey,
     );
 
-    final secretKey = await sharedSecret.extractMasterSecret();
-    final symmetricKey = SecretKey(secretKey);
-
-    final nonce = _cipher.newNonce();
     final secretBox = await _cipher.encrypt(
       plaintextPayload,
-      secretKey: symmetricKey,
-      nonce: nonce,
+      secretKey: sharedSecret,
     );
 
     final builder = BytesBuilder();
@@ -79,9 +74,6 @@ class MeshCrypto {
       remotePublicKey: senderX25519PublicKey,
     );
 
-    final secretKey = await sharedSecret.extractMasterSecret();
-    final symmetricKey = SecretKey(secretKey);
-
     final secretBox = SecretBox(
       cipherText,
       nonce: nonce,
@@ -90,7 +82,7 @@ class MeshCrypto {
 
     final cleartext = await _cipher.decrypt(
       secretBox,
-      secretKey: symmetricKey,
+      secretKey: sharedSecret,
     );
 
     return Uint8List.fromList(cleartext);

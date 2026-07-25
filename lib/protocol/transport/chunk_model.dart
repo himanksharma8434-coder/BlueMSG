@@ -32,7 +32,7 @@ class MessageChunk {
     if (decoded is! CborMap) {
       throw const FormatException('Invalid chunk CBOR: expected CborMap');
     }
-    final map = decoded.map;
+    final CborMap map = decoded;
 
     final messageIdVal = map[const CborSmallInt(0)];
     final chunkIndexVal = map[const CborSmallInt(1)];
