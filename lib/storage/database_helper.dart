@@ -8,8 +8,11 @@ class DatabaseHelper {
 
   Database? _database;
   final DatabaseFactory? _factory; // Allows injection for testing
+  final String? _dbPath; // Allows overriding path (e.g. inMemoryDatabasePath for tests)
 
-  DatabaseHelper({DatabaseFactory? factory}) : _factory = factory;
+  DatabaseHelper({DatabaseFactory? factory, String? dbPath})
+      : _factory = factory,
+        _dbPath = dbPath;
 
   Future<Database> get database async {
     if (_database != null) return _database!;
@@ -19,8 +22,13 @@ class DatabaseHelper {
 
   Future<Database> _initDatabase() async {
     final factory = _factory ?? databaseFactory;
-    final dbPath = await factory.getDatabasesPath();
-    final path = p.join(dbPath, _dbName);
+    final String path;
+    if (_dbPath != null) {
+      path = _dbPath;
+    } else {
+      final dbDir = await factory.getDatabasesPath();
+      path = p.join(dbDir, _dbName);
+    }
 
     return await factory.openDatabase(
       path,
