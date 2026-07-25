@@ -12,6 +12,8 @@ class EnvelopeSerializer {
   static const int _kPayload = 5;
   static const int _kSignature = 6;
   static const int _kSenderNickname = 7;
+  static const int _kSenderPublicKey = 8;
+  static const int _kSenderEncryptionKey = 9;
 
   /// Encodes a MessageEnvelope into compact binary CBOR bytes.
   static Uint8List encode(MessageEnvelope envelope) {
@@ -20,6 +22,10 @@ class EnvelopeSerializer {
       CborSmallInt(_kSenderId): CborString(envelope.senderId),
       if (envelope.senderNickname != null)
         CborSmallInt(_kSenderNickname): CborString(envelope.senderNickname!),
+      if (envelope.senderPublicKey != null)
+        CborSmallInt(_kSenderPublicKey): CborBytes(envelope.senderPublicKey!),
+      if (envelope.senderEncryptionKey != null)
+        CborSmallInt(_kSenderEncryptionKey): CborBytes(envelope.senderEncryptionKey!),
       if (envelope.recipientId != null)
         CborSmallInt(_kRecipientId): CborString(envelope.recipientId!)
       else
@@ -66,18 +72,28 @@ class EnvelopeSerializer {
       throw FormatException('Missing or invalid int field for key $key');
     }
 
-    Uint8List getBytes(int key) {
+    Uint8List? getOptionalBytes(int key) {
       final value = map[CborSmallInt(key)];
       if (value is CborBytes) {
         return Uint8List.fromList(value.bytes);
       }
-      throw FormatException('Missing or invalid bytes field for key $key');
+      return null;
+    }
+
+    Uint8List getBytes(int key) {
+      final value = getOptionalBytes(key);
+      if (value == null) {
+        throw FormatException('Missing or invalid bytes field for key $key');
+      }
+      return value;
     }
 
     return MessageEnvelope(
       messageId: getString(_kMessageId),
       senderId: getString(_kSenderId),
       senderNickname: getOptionalString(_kSenderNickname),
+      senderPublicKey: getOptionalBytes(_kSenderPublicKey),
+      senderEncryptionKey: getOptionalBytes(_kSenderEncryptionKey),
       recipientId: getOptionalString(_kRecipientId),
       ttl: getInt(_kTtl),
       timestamp: getInt(_kTimestamp),

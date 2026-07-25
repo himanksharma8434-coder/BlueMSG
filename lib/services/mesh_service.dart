@@ -200,17 +200,27 @@ class MeshService extends ChangeNotifier {
 
   /// Process fully verified and assembled envelope for local display & storage.
   Future<void> _processIncomingMessage(MessageEnvelope envelope) async {
-    // If envelope carries senderNickname, update peer contact registry
-    if (envelope.senderNickname != null && envelope.senderNickname!.isNotEmpty) {
-      final existingPeer = await peerRepo.getPeerById(envelope.senderId);
-      await peerRepo.upsertPeer(Peer(
-        deviceId: envelope.senderId,
-        publicKeyBase64: existingPeer?.publicKeyBase64 ?? '',
-        encryptionKeyBase64: existingPeer?.encryptionKeyBase64,
-        nickname: envelope.senderNickname,
-        lastSeen: DateTime.now().millisecondsSinceEpoch,
-      ));
-    }
+    final existingPeer = await peerRepo.getPeerById(envelope.senderId);
+
+    final updatedPublicKeyBase64 = envelope.senderPublicKey != null
+        ? base64Encode(envelope.senderPublicKey!)
+        : (existingPeer?.publicKeyBase64 ?? '');
+
+    final updatedEncKeyBase64 = envelope.senderEncryptionKey != null
+        ? base64Encode(envelope.senderEncryptionKey!)
+        : existingPeer?.encryptionKeyBase64;
+
+    final updatedNickname = (envelope.senderNickname != null && envelope.senderNickname!.isNotEmpty)
+        ? envelope.senderNickname
+        : existingPeer?.nickname;
+
+    await peerRepo.upsertPeer(Peer(
+      deviceId: envelope.senderId,
+      publicKeyBase64: updatedPublicKeyBase64,
+      encryptionKeyBase64: updatedEncKeyBase64,
+      nickname: updatedNickname,
+      lastSeen: DateTime.now().millisecondsSinceEpoch,
+    ));
 
     String decryptedBody;
 
@@ -220,23 +230,30 @@ class MeshService extends ChangeNotifier {
     } else {
       // Direct message — decrypt via X25519 / ChaCha20-Poly1305
       try {
-        final peer = await peerRepo.getPeerById(envelope.senderId);
-        if (peer != null && peer.encryptionKeyBytes != null) {
-          final senderXKey = await MeshIdentity.fromPrivateKeyBytes(
-            ed25519PrivateBytes: peer.publicKeyBytes,
-            x25519PrivateBytes: peer.encryptionKeyBytes!,
+        final senderEncKeyBytes = envelope.senderEncryptionKey ??
+            (await peerRepo.getPeerById(envelope.senderId))?.encryptionKeyBytes;
+
+        if (senderEncKeyBytes != null && senderEncKeyBytes.length >= 32) {
+          final senderXKey = SimplePublicKey(
+            senderEncKeyBytes,
+            type: KeyPairType.x25519,
           );
           final decryptedBytes = await MeshCrypto.decryptDirectMessage(
             encryptedPayload: envelope.payload,
             recipientX25519KeyPair: _currentIdentity!.x25519KeyPair,
-            senderX25519PublicKey: senderXKey.x25519PublicKey,
+            senderX25519PublicKey: senderXKey,
           );
           decryptedBody = utf8.decode(decryptedBytes);
         } else {
-          decryptedBody = utf8.decode(envelope.payload); // Fallback
+          decryptedBody = utf8.decode(envelope.payload); // Cleartext fallback
         }
-      } catch (_) {
-        decryptedBody = '[Encrypted Message]';
+      } catch (e) {
+        // Fallback to UTF-8 if unencrypted or error
+        try {
+          decryptedBody = utf8.decode(envelope.payload);
+        } catch (_) {
+          decryptedBody = '[Encrypted Message]';
+        }
       }
     }
 
@@ -306,24 +323,29 @@ class MeshService extends ChangeNotifier {
     } else {
       // Direct message E2E encryption
       final peer = await peerRepo.getPeerById(recipientId);
-      if (peer != null && peer.encryptionKeyBytes != null) {
-        final recipientIdentity = await MeshIdentity.fromPrivateKeyBytes(
-          ed25519PrivateBytes: peer.publicKeyBytes,
-          x25519PrivateBytes: peer.encryptionKeyBytes!,
+      if (peer != null && peer.encryptionKeyBytes != null && peer.encryptionKeyBytes!.length >= 32) {
+        final recipientXKey = SimplePublicKey(
+          peer.encryptionKeyBytes!,
+          type: KeyPairType.x25519,
         );
         envelopePayload = await MeshCrypto.encryptDirectMessage(
           plaintextPayload: payloadBytes,
           senderX25519KeyPair: _currentIdentity!.x25519KeyPair,
-          recipientX25519PublicKey: recipientIdentity.x25519PublicKey,
+          recipientX25519PublicKey: recipientXKey,
         );
       } else {
-        envelopePayload = payloadBytes; // Fallback
+        envelopePayload = payloadBytes; // Cleartext fallback until key exchange completes
       }
     }
+
+    final edPubBytes = Uint8List.fromList(_currentIdentity!.ed25519PublicKey.bytes);
+    final xPubBytes = Uint8List.fromList(_currentIdentity!.x25519PublicKey.bytes);
 
     final tempEnvelope = MessageEnvelope.create(
       senderId: _currentIdentity!.deviceId,
       senderNickname: _currentIdentity!.nickname,
+      senderPublicKey: edPubBytes,
+      senderEncryptionKey: xPubBytes,
       recipientId: recipientId,
       ttl: 6,
       payload: envelopePayload,
@@ -339,6 +361,8 @@ class MeshService extends ChangeNotifier {
       messageId: tempEnvelope.messageId,
       senderId: _currentIdentity!.deviceId,
       senderNickname: _currentIdentity!.nickname,
+      senderPublicKey: edPubBytes,
+      senderEncryptionKey: xPubBytes,
       recipientId: recipientId,
       ttl: 6,
       timestamp: tempEnvelope.timestamp,

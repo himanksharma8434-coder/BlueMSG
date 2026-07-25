@@ -6,6 +6,8 @@ class MessageEnvelope {
   final String messageId;
   final String senderId;
   final String? senderNickname;
+  final Uint8List? senderPublicKey; // Ed25519 public key bytes (32 bytes)
+  final Uint8List? senderEncryptionKey; // X25519 public key bytes (32 bytes)
   final String? recipientId;
   final int ttl;
   final int timestamp;
@@ -16,6 +18,8 @@ class MessageEnvelope {
     required this.messageId,
     required this.senderId,
     this.senderNickname,
+    this.senderPublicKey,
+    this.senderEncryptionKey,
     this.recipientId,
     this.ttl = 6,
     required this.timestamp,
@@ -27,6 +31,8 @@ class MessageEnvelope {
   factory MessageEnvelope.create({
     required String senderId,
     String? senderNickname,
+    Uint8List? senderPublicKey,
+    Uint8List? senderEncryptionKey,
     String? recipientId,
     int ttl = 6,
     required Uint8List payload,
@@ -38,6 +44,8 @@ class MessageEnvelope {
       messageId: messageId ?? const Uuid().v4(),
       senderId: senderId,
       senderNickname: senderNickname,
+      senderPublicKey: senderPublicKey,
+      senderEncryptionKey: senderEncryptionKey,
       recipientId: recipientId,
       ttl: ttl,
       timestamp: timestamp ?? DateTime.now().millisecondsSinceEpoch,
@@ -52,6 +60,8 @@ class MessageEnvelope {
       messageId: messageId,
       senderId: senderId,
       senderNickname: senderNickname,
+      senderPublicKey: senderPublicKey,
+      senderEncryptionKey: senderEncryptionKey,
       recipientId: recipientId,
       ttl: ttl > 0 ? ttl - 1 : 0,
       timestamp: timestamp,
