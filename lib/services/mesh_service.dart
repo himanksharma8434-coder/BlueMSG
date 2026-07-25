@@ -1,0 +1,420 @@
+import 'dart:async';
+import 'dart:io';
+import 'dart:convert';
+import 'dart:typed_data';
+import 'package:flutter/foundation.dart';
+import '../protocol/cache/dedup_cache.dart';
+import '../protocol/crypto/mesh_crypto.dart';
+import '../protocol/identity/identity_storage.dart';
+import '../protocol/identity/mesh_identity.dart';
+import '../protocol/models/message_envelope.dart';
+import '../protocol/relay/relay_engine.dart';
+import '../protocol/serialization/envelope_serializer.dart';
+import '../protocol/transport/chunk_model.dart';
+import '../protocol/transport/chunker.dart';
+import '../protocol/transport/reassembler.dart';
+import '../storage/database_helper.dart';
+import '../storage/models/peer.dart';
+import '../storage/models/pending_message.dart';
+import '../storage/models/stored_message.dart';
+import '../storage/repositories/message_repository.dart';
+import '../storage/repositories/peer_repository.dart';
+import '../storage/repositories/pending_message_repository.dart';
+import '../transport/android/android_ble_transport.dart';
+import '../transport/ios/ios_ble_transport.dart';
+import '../transport/mock_transport.dart';
+import '../transport/transport_interface.dart';
+
+/// Single entry point connecting UI ↔ Protocol ↔ Storage ↔ BLE Transport.
+class MeshService extends ChangeNotifier {
+  final IdentityStorageInterface identityStorage;
+  final DatabaseHelper dbHelper;
+
+  late MessageRepository messageRepo;
+  late PeerRepository peerRepo;
+  late PendingMessageRepository pendingRepo;
+
+  late Transport transport;
+  late DedupCache _dedupCache;
+  late RelayEngine _relayEngine;
+  late Reassembler _reassembler;
+
+  MeshIdentity? _currentIdentity;
+  bool _isInitialized = false;
+
+  // Real-time streams
+  final StreamController<StoredMessage> _messageReceivedCtrl =
+      StreamController.broadcast();
+  final StreamController<List<DiscoveredPeer>> _nearbyPeersCtrl =
+      StreamController.broadcast();
+
+  final Map<String, DiscoveredPeer> _activePeers = {};
+
+  // Diagnostics counters
+  int _totalRelayedCount = 0;
+  int _totalSentCount = 0;
+  int _totalReceivedCount = 0;
+
+  MeshService({
+    IdentityStorageInterface? identityStorage,
+    DatabaseHelper? dbHelper,
+    Transport? customTransport,
+  })  : identityStorage = identityStorage ?? SecureIdentityStorage(),
+        dbHelper = dbHelper ?? DatabaseHelper() {
+    messageRepo = MessageRepository(this.dbHelper);
+    peerRepo = PeerRepository(this.dbHelper);
+    pendingRepo = PendingMessageRepository(this.dbHelper);
+
+    if (customTransport != null) {
+      transport = customTransport;
+    } else if (!kIsWeb && Platform.isAndroid) {
+      transport = AndroidBleTransport();
+    } else if (!kIsWeb && Platform.isIOS) {
+      transport = IosBleTransport();
+    } else {
+      transport = MockTransport();
+    }
+  }
+
+  bool get isInitialized => _isInitialized;
+  MeshIdentity? get currentIdentity => _currentIdentity;
+  Stream<StoredMessage> get onMessageReceived => _messageReceivedCtrl.stream;
+  Stream<List<DiscoveredPeer>> get nearbyPeersStream => _nearbyPeersCtrl.stream;
+  List<DiscoveredPeer> get nearbyPeers => _activePeers.values.toList();
+  int get totalRelayedCount => _totalRelayedCount;
+
+  /// Initializes identity, protocol engines, storage, and BLE transport.
+  Future<bool> initialize() async {
+    _currentIdentity = await identityStorage.loadIdentity();
+    if (_currentIdentity == null) {
+      return false; // Requires onboarding identity creation
+    }
+
+    _setupProtocolEngines();
+    await _startMeshTransport();
+    _isInitialized = true;
+    notifyListeners();
+    return true;
+  }
+
+  /// Called after onboarding generates a new identity.
+  Future<void> setIdentity(MeshIdentity identity) async {
+    await identityStorage.saveIdentity(identity);
+    _currentIdentity = identity;
+    _setupProtocolEngines();
+    await _startMeshTransport();
+    _isInitialized = true;
+    notifyListeners();
+  }
+
+  void _setupProtocolEngines() {
+    _dedupCache = DedupCache();
+    _reassembler = Reassembler();
+    _relayEngine = RelayEngine(
+      myDeviceId: _currentIdentity!.deviceId,
+      dedupCache: _dedupCache,
+      signatureVerifier: _verifyMessageSignature,
+    );
+  }
+
+  Future<void> _startMeshTransport() async {
+    // Transport incoming data listener
+    transport.incomingData.listen(_handleIncomingBleData);
+
+    // Peer discovered listener
+    transport.peerDiscovered.listen((peer) {
+      _activePeers[peer.peerId] = peer;
+      _nearbyPeersCtrl.add(_activePeers.values.toList());
+
+      // Save peer to local SQLite contacts
+      peerRepo.upsertPeer(Peer(
+        deviceId: peer.peerId,
+        publicKeyBase64: '', // Updated during key exchange
+        nickname: peer.name,
+        lastSeen: DateTime.now().millisecondsSinceEpoch,
+      ));
+
+      // Attempt store-and-forward outbox delivery
+      _flushPendingMessagesForPeer(peer.peerId);
+      notifyListeners();
+    });
+
+    // Peer lost listener
+    transport.peerLost.listen((peerId) {
+      _activePeers.remove(peerId);
+      _nearbyPeersCtrl.add(_activePeers.values.toList());
+      notifyListeners();
+    });
+
+    // Start BLE scanning and advertising
+    await transport.startAdvertising();
+    await transport.startScanning();
+  }
+
+  /// Process incoming raw BLE bytes chunk from a peer.
+  Future<void> _handleIncomingBleData(
+      ({String peerId, Uint8List data}) incoming) async {
+    try {
+      final chunk = MessageChunk.fromBytes(incoming.data);
+      final completeEnvelopeBytes = _reassembler.addChunk(chunk);
+
+      if (completeEnvelopeBytes == null) return; // Still buffering chunks
+
+      final envelope = EnvelopeSerializer.decode(completeEnvelopeBytes);
+      final decision = await _relayEngine.evaluate(envelope);
+
+      if (decision.isDropped) return;
+
+      // 1. Local display decision
+      if (decision.shouldDisplayLocally) {
+        _totalReceivedCount++;
+        await _processIncomingMessage(envelope);
+      }
+
+      // 2. Rebroadcast decision (mesh relay hop)
+      if (decision.envelopeToRebroadcast != null) {
+        _totalRelayedCount++;
+        final rebroadcastBytes =
+            EnvelopeSerializer.encode(decision.envelopeToRebroadcast!);
+        final chunks = Chunker.chunkEnvelope(
+          messageId: decision.envelopeToRebroadcast!.messageId,
+          payloadBytes: rebroadcastBytes,
+        );
+        for (final c in chunks) {
+          await transport.broadcast(c.toBytes());
+        }
+      }
+    } catch (e) {
+      debugPrint('Error processing incoming mesh chunk: $e');
+    }
+  }
+
+  /// Process fully verified and assembled envelope for local display & storage.
+  Future<void> _processIncomingMessage(MessageEnvelope envelope) async {
+    String decryptedBody;
+
+    if (envelope.recipientId == null) {
+      // Broadcast message — cleartext UTF-8 string
+      decryptedBody = utf8.decode(envelope.payload);
+    } else {
+      // Direct message — decrypt via X25519 / ChaCha20-Poly1305
+      try {
+        final peer = await peerRepo.getPeerById(envelope.senderId);
+        if (peer != null && peer.encryptionKeyBytes != null) {
+          final senderXKey = await MeshIdentity.fromPrivateKeyBytes(
+            ed25519PrivateBytes: peer.publicKeyBytes,
+            x25519PrivateBytes: peer.encryptionKeyBytes!,
+          );
+          final decryptedBytes = await MeshCrypto.decryptDirectMessage(
+            encryptedPayload: envelope.payload,
+            recipientX25519KeyPair: _currentIdentity!.x25519KeyPair,
+            senderX25519PublicKey: senderXKey.x25519PublicKey,
+          );
+          decryptedBody = utf8.decode(decryptedBytes);
+        } else {
+          decryptedBody = utf8.decode(envelope.payload); // Fallback
+        }
+      } catch (_) {
+        decryptedBody = '[Encrypted Message]';
+      }
+    }
+
+    final conversationId = envelope.recipientId == null
+        ? 'broadcast'
+        : envelope.senderId;
+
+    final storedMsg = StoredMessage(
+      id: envelope.messageId,
+      conversationId: conversationId,
+      senderId: envelope.senderId,
+      recipientId: envelope.recipientId,
+      body: decryptedBody,
+      timestamp: envelope.timestamp,
+      status: DeliveryStatus.delivered,
+      direction: MessageDirection.incoming,
+    );
+
+    await messageRepo.insertMessage(storedMsg);
+    _messageReceivedCtrl.add(storedMsg);
+    notifyListeners();
+  }
+
+  /// Signature verification callback used by RelayEngine.
+  Future<bool> _verifyMessageSignature({
+    required String senderId,
+    required Uint8List signableBytes,
+    required Uint8List signature,
+  }) async {
+    final peer = await peerRepo.getPeerById(senderId);
+    if (peer == null) return true; // Accept un-saved peer signatures initially
+
+    try {
+      final senderIdentity = await MeshIdentity.fromPrivateKeyBytes(
+        ed25519PrivateBytes: peer.publicKeyBytes,
+        x25519PrivateBytes: peer.encryptionKeyBytes ?? peer.publicKeyBytes,
+      );
+      return await MeshCrypto.verifySignature(
+        bytes: signableBytes,
+        signatureBytes: signature,
+        publicKey: senderIdentity.ed25519PublicKey,
+      );
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Sends a new message (direct 1-on-1 or broadcast).
+  Future<StoredMessage> sendMessage({
+    required String? recipientId,
+    required String body,
+  }) async {
+    if (_currentIdentity == null) {
+      throw StateError('Identity not initialized');
+    }
+
+    final conversationId = recipientId ?? 'broadcast';
+    final payloadBytes = Uint8List.fromList(utf8.encode(body));
+
+    Uint8List envelopePayload;
+
+    if (recipientId == null) {
+      // Broadcast cleartext payload
+      envelopePayload = payloadBytes;
+    } else {
+      // Direct message E2E encryption
+      final peer = await peerRepo.getPeerById(recipientId);
+      if (peer != null && peer.encryptionKeyBytes != null) {
+        final recipientIdentity = await MeshIdentity.fromPrivateKeyBytes(
+          ed25519PrivateBytes: peer.publicKeyBytes,
+          x25519PrivateBytes: peer.encryptionKeyBytes!,
+        );
+        envelopePayload = await MeshCrypto.encryptDirectMessage(
+          plaintextPayload: payloadBytes,
+          senderX25519KeyPair: _currentIdentity!.x25519KeyPair,
+          recipientX25519PublicKey: recipientIdentity.x25519PublicKey,
+        );
+      } else {
+        envelopePayload = payloadBytes; // Fallback
+      }
+    }
+
+    final tempEnvelope = MessageEnvelope.create(
+      senderId: _currentIdentity!.deviceId,
+      recipientId: recipientId,
+      ttl: 6,
+      payload: envelopePayload,
+      signature: Uint8List(64), // Signature placeholder
+    );
+
+    final signature = await MeshCrypto.signBytes(
+      bytes: tempEnvelope.getSignableBytes(),
+      keyPair: _currentIdentity!.ed25519KeyPair,
+    );
+
+    final finalEnvelope = MessageEnvelope.create(
+      messageId: tempEnvelope.messageId,
+      senderId: _currentIdentity!.deviceId,
+      recipientId: recipientId,
+      ttl: 6,
+      timestamp: tempEnvelope.timestamp,
+      payload: envelopePayload,
+      signature: signature,
+    );
+
+    final storedMsg = StoredMessage(
+      id: finalEnvelope.messageId,
+      conversationId: conversationId,
+      senderId: _currentIdentity!.deviceId,
+      recipientId: recipientId,
+      body: body,
+      timestamp: finalEnvelope.timestamp,
+      status: DeliveryStatus.pending,
+      direction: MessageDirection.outgoing,
+    );
+
+    await messageRepo.insertMessage(storedMsg);
+    _totalSentCount++;
+
+    final serializedEnvelope = EnvelopeSerializer.encode(finalEnvelope);
+    final chunks = Chunker.chunkEnvelope(
+      messageId: finalEnvelope.messageId,
+      payloadBytes: serializedEnvelope,
+    );
+
+    // Try sending over active transport
+    final isReachable = recipientId == null || transport.connectedPeers.contains(recipientId);
+
+    if (isReachable) {
+      for (final chunk in chunks) {
+        if (recipientId != null) {
+          await transport.send(recipientId, chunk.toBytes());
+        } else {
+          await transport.broadcast(chunk.toBytes());
+        }
+      }
+      await messageRepo.updateStatus(finalEnvelope.messageId, DeliveryStatus.sent);
+    } else {
+      // Store and forward outbox queue
+      await pendingRepo.enqueue(PendingMessage(
+        messageId: finalEnvelope.messageId,
+        recipientId: recipientId,
+        envelopeBytes: serializedEnvelope,
+        createdAt: DateTime.now().millisecondsSinceEpoch,
+        expiresAt: DateTime.now()
+            .add(PendingMessageRepository.defaultExpiry)
+            .millisecondsSinceEpoch,
+      ));
+    }
+
+    notifyListeners();
+    return storedMsg;
+  }
+
+  /// Flushes pending outbox messages when a target peer comes into range.
+  Future<void> _flushPendingMessagesForPeer(String peerId) async {
+    final pendingList = await pendingRepo.getForRecipient(peerId);
+    for (final pending in pendingList) {
+      try {
+        final chunks = Chunker.chunkEnvelope(
+          messageId: pending.messageId,
+          payloadBytes: pending.envelopeBytes,
+        );
+        for (final c in chunks) {
+          await transport.send(peerId, c.toBytes());
+        }
+        await pendingRepo.remove(pending.messageId);
+        await messageRepo.updateStatus(pending.messageId, DeliveryStatus.delivered);
+      } catch (_) {
+        await pendingRepo.markAttempt(pending.messageId);
+      }
+    }
+  }
+
+  /// Diagnostics metadata summary.
+  Future<Map<String, dynamic>> getMeshDiagnostics() async {
+    final pendingCount = await pendingRepo.count();
+    final pendingMessagesCount = await messageRepo.countByStatus(DeliveryStatus.pending);
+    final deliveredMessagesCount = await messageRepo.countByStatus(DeliveryStatus.delivered);
+
+    return {
+      'deviceId': _currentIdentity?.deviceId ?? 'Unknown',
+      'isActive': transport.isActive,
+      'connectedPeersCount': transport.connectedPeers.length,
+      'connectedPeers': transport.connectedPeers.toList(),
+      'pendingOutboxCount': pendingCount,
+      'totalSent': _totalSentCount,
+      'totalReceived': _totalReceivedCount,
+      'totalRelayed': _totalRelayedCount,
+      'pendingMessagesCount': pendingMessagesCount,
+      'deliveredMessagesCount': deliveredMessagesCount,
+    };
+  }
+
+  @override
+  void dispose() {
+    transport.dispose();
+    _messageReceivedCtrl.close();
+    _nearbyPeersCtrl.close();
+    super.dispose();
+  }
+}
