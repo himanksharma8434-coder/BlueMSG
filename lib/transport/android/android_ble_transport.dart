@@ -204,6 +204,8 @@ class AndroidBleTransport implements Transport {
     }
   }
 
+  final Map<String, BluetoothCharacteristic> _writeCharacteristics = {};
+
   /// Connect to a discovered peer, discover the mesh service, subscribe to notifications.
   Future<void> _connectAndDiscover(BluetoothDevice device, String peerId) async {
     try {
@@ -214,6 +216,7 @@ class AndroidBleTransport implements Transport {
         if (state == BluetoothConnectionState.disconnected) {
           _connectedPeers.remove(peerId);
           _fbpDevices.remove(peerId);
+          _writeCharacteristics.remove(peerId);
           _notifySubscriptions[peerId]?.cancel();
           _notifySubscriptions.remove(peerId);
           _peerLostCtrl.add(peerId);
@@ -225,6 +228,11 @@ class AndroidBleTransport implements Transport {
         if (service.uuid.str.toLowerCase() == BleConstants.serviceUuid.toLowerCase()) {
           for (final char in service.characteristics) {
             final charUuid = char.uuid.str.toLowerCase();
+
+            // Cache the write characteristic for fast instantaneous sending
+            if (charUuid == BleConstants.writeCharUuid.toLowerCase()) {
+              _writeCharacteristics[peerId] = char;
+            }
 
             // Subscribe to the notify characteristic for incoming data
             if (charUuid == BleConstants.notifyCharUuid.toLowerCase()) {
@@ -245,6 +253,7 @@ class AndroidBleTransport implements Transport {
       // Connection failed — remove peer
       _connectedPeers.remove(peerId);
       _fbpDevices.remove(peerId);
+      _writeCharacteristics.remove(peerId);
     }
   }
 
@@ -283,18 +292,29 @@ class AndroidBleTransport implements Transport {
 
   /// Write data to a peer's GATT server writable characteristic (central mode).
   Future<void> _writeViaCentral(BluetoothDevice device, Uint8List data) async {
-    final services = await device.discoverServices();
-    for (final service in services) {
-      if (service.uuid.str.toLowerCase() == BleConstants.serviceUuid.toLowerCase()) {
-        for (final char in service.characteristics) {
-          if (char.uuid.str.toLowerCase() == BleConstants.writeCharUuid.toLowerCase()) {
-            await char.write(data, withoutResponse: false);
-            return;
+    final peerId = device.remoteId.str;
+    var char = _writeCharacteristics[peerId];
+
+    if (char == null) {
+      final services = await device.discoverServices();
+      for (final service in services) {
+        if (service.uuid.str.toLowerCase() == BleConstants.serviceUuid.toLowerCase()) {
+          for (final c in service.characteristics) {
+            if (c.uuid.str.toLowerCase() == BleConstants.writeCharUuid.toLowerCase()) {
+              char = c;
+              _writeCharacteristics[peerId] = c;
+              break;
+            }
           }
         }
       }
     }
-    throw Exception('Mesh write characteristic not found on peer ${device.remoteId.str}');
+
+    if (char != null) {
+      await char.write(data, withoutResponse: true);
+      return;
+    }
+    throw Exception('Mesh write characteristic not found on peer $peerId');
   }
 
   /// Write data via native peripheral channel (GATT server notifying a connected central).
