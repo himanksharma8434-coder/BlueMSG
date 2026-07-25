@@ -261,15 +261,22 @@ class AndroidBleTransport implements Transport {
 
   @override
   Future<void> send(String peerId, Uint8List data) async {
-    // Try central-mode write first (we're the GATT client writing to the peer's GATT server)
+    // 1. Try central-mode write if peerId is a connected MAC address
     final device = _fbpDevices[peerId];
     if (device != null) {
-      await _writeViaCentral(device, data);
-      return;
+      try {
+        await _writeViaCentral(device, data);
+        return;
+      } catch (_) {}
     }
 
-    // Fallback: try sending via the native peripheral-side (peer connected to our GATT server)
-    await _writeViaPeripheral(peerId, data);
+    // 2. Try sending via native peripheral-side (peer connected to our GATT server)
+    try {
+      await _writeViaPeripheral(peerId, data);
+    } catch (_) {}
+
+    // 3. Mesh Routing / Relaying: Broadcast packet to all connected BLE devices so intended recipient or relays receive it
+    await broadcast(data);
   }
 
   @override

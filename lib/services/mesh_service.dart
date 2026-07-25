@@ -135,14 +135,6 @@ class MeshService extends ChangeNotifier {
       _activePeers[peer.peerId] = peer;
       _nearbyPeersCtrl.add(_activePeers.values.toList());
 
-      // Save peer to local SQLite contacts
-      peerRepo.upsertPeer(Peer(
-        deviceId: peer.peerId,
-        publicKeyBase64: '', // Updated during key exchange
-        nickname: peer.name,
-        lastSeen: DateTime.now().millisecondsSinceEpoch,
-      ));
-
       // Attempt store-and-forward outbox delivery
       _flushPendingMessagesForPeer(peer.peerId);
       notifyListeners();
@@ -200,6 +192,14 @@ class MeshService extends ChangeNotifier {
 
   /// Process fully verified and assembled envelope for local display & storage.
   Future<void> _processIncomingMessage(MessageEnvelope envelope) async {
+    // Clean up temporary MAC address entries in SQLite peer repo
+    final legacyPeers = await peerRepo.getAllPeers();
+    for (final p in legacyPeers) {
+      if (p.deviceId.contains(':')) {
+        await peerRepo.deletePeer(p.deviceId);
+      }
+    }
+
     final existingPeer = await peerRepo.getPeerById(envelope.senderId);
 
     final updatedPublicKeyBase64 = envelope.senderPublicKey != null
@@ -393,10 +393,10 @@ class MeshService extends ChangeNotifier {
       payloadBytes: serializedEnvelope,
     );
 
-    // Try sending over active transport
-    final isReachable = recipientId == null || transport.connectedPeers.contains(recipientId);
+    // Try sending over active transport if any connected peer/relay is available
+    final hasActiveConnections = transport.connectedPeers.isNotEmpty;
 
-    if (isReachable) {
+    if (hasActiveConnections) {
       for (final chunk in chunks) {
         if (recipientId != null) {
           await transport.send(recipientId, chunk.toBytes());
@@ -409,7 +409,7 @@ class MeshService extends ChangeNotifier {
       // Store and forward outbox queue
       await pendingRepo.enqueue(PendingMessage(
         messageId: finalEnvelope.messageId,
-        recipientId: recipientId,
+        recipientId: recipientId ?? 'broadcast',
         envelopeBytes: serializedEnvelope,
         createdAt: DateTime.now().millisecondsSinceEpoch,
         expiresAt: DateTime.now()
