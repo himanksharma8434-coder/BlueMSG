@@ -73,10 +73,14 @@ class AndroidBleTransport implements Transport {
   @override
   Future<void> startAdvertising() async {
     try {
+      final hasPermission = await requestPermissions();
+      if (!hasPermission) {
+        return;
+      }
       await _methodChannel.invokeMethod('startAdvertising');
       _listenToPeripheralEvents();
-    } on PlatformException catch (e) {
-      throw Exception('Failed to start BLE advertising: ${e.message}');
+    } catch (e) {
+      // Gracefully log advertising failure (e.g. Bluetooth turned off or unsupported)
     }
   }
 
@@ -84,9 +88,7 @@ class AndroidBleTransport implements Transport {
   Future<void> stopAdvertising() async {
     try {
       await _methodChannel.invokeMethod('stopAdvertising');
-    } on PlatformException catch (e) {
-      throw Exception('Failed to stop BLE advertising: ${e.message}');
-    }
+    } catch (_) {}
   }
 
   /// Listen to events from the native GATT server (data received, peer connected/disconnected).
@@ -122,7 +124,7 @@ class AndroidBleTransport implements Transport {
           _peerLostCtrl.add(peerId);
           break;
       }
-    });
+    }, onError: (_) {});
   }
 
   // ── Scanning (Central Mode — flutter_blue_plus) ──────────────────────
@@ -131,30 +133,37 @@ class AndroidBleTransport implements Transport {
   Future<void> startScanning() async {
     _isActive = true;
 
-    // Continuous scan with the mesh service UUID filter
-    _scanSubscription?.cancel();
-    _scanSubscription = FlutterBluePlus.onScanResults.listen(
-      (results) {
-        for (final result in results) {
-          _handleScanResult(result);
-        }
-      },
-      onError: (e) {
-        // Log scan errors but keep going
-      },
-    );
+    try {
+      final hasPermission = await requestPermissions();
+      if (!hasPermission) return;
 
-    await FlutterBluePlus.startScan(
-      withServices: [Guid(BleConstants.serviceUuid)],
-      androidUsesFineLocation: true,
-      continuousUpdates: true,
-      continuousDivisor: 1,
-    );
+      // Continuous scan with the mesh service UUID filter
+      _scanSubscription?.cancel();
+      _scanSubscription = FlutterBluePlus.onScanResults.listen(
+        (results) {
+          for (final result in results) {
+            _handleScanResult(result);
+          }
+        },
+        onError: (_) {},
+      );
+
+      await FlutterBluePlus.startScan(
+        withServices: [Guid(BleConstants.serviceUuid)],
+        androidUsesFineLocation: true,
+        continuousUpdates: true,
+        continuousDivisor: 1,
+      );
+    } catch (_) {
+      // Gracefully handle scan start errors (e.g., Bluetooth turned off)
+    }
   }
 
   @override
   Future<void> stopScanning() async {
-    await FlutterBluePlus.stopScan();
+    try {
+      await FlutterBluePlus.stopScan();
+    } catch (_) {}
     _scanSubscription?.cancel();
     _scanSubscription = null;
   }

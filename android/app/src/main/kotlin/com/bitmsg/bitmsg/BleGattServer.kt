@@ -112,14 +112,22 @@ class BleGattServer(private val context: Context) {
     /**
      * Initialize the GATT server and start advertising.
      */
-    fun start() {
-        bluetoothManager = context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager
-        val adapter = bluetoothManager?.adapter
-            ?: throw IllegalStateException("Bluetooth not available")
+    fun start(): Boolean {
+        try {
+            bluetoothManager = context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager
+            val adapter = bluetoothManager?.adapter ?: return false
 
-        // Open GATT server
-        gattServer = bluetoothManager?.openGattServer(context, gattCallback)
-            ?: throw IllegalStateException("Cannot open GATT server")
+            if (!adapter.isEnabled) {
+                Log.w(TAG, "Bluetooth is disabled")
+                return false
+            }
+
+            // Open GATT server
+            gattServer = bluetoothManager?.openGattServer(context, gattCallback)
+            if (gattServer == null) {
+                Log.w(TAG, "Cannot open GATT server")
+                return false
+            }
 
         // Build the mesh service with write + notify characteristics
         val service = BluetoothGattService(SERVICE_UUID, BluetoothGattService.SERVICE_TYPE_PRIMARY)
@@ -150,6 +158,11 @@ class BleGattServer(private val context: Context) {
         // Start advertising
         advertiser = adapter.bluetoothLeAdvertiser
         startAdvertising()
+        return true
+        } catch (e: Exception) {
+            Log.e(TAG, "Error starting BLE GATT server: ${e.message}")
+            return false
+        }
     }
 
     private fun startAdvertising() {
