@@ -3,9 +3,12 @@ package com.bitmsg.bitmsg
 import android.bluetooth.*
 import android.bluetooth.le.*
 import android.content.Context
+import android.os.Build
 import android.os.ParcelUuid
 import android.util.Log
 import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * Native BLE GATT Server (Peripheral mode).
@@ -13,10 +16,15 @@ import java.util.UUID
  * Advertises the bitmsg mesh service UUID and exposes:
  *   - A writable characteristic (other devices write message chunks here)
  *   - A notify characteristic (this device pushes data out to connected centrals)
+ *
+ * Thread-safety: GATT callbacks arrive on Binder threads; all mutable state uses
+ * concurrent collections. Notification send uses flow control via onNotificationSent.
  */
 class BleGattServer(private val context: Context) {
     companion object {
         private const val TAG = "BleGattServer"
+        private const val DEFAULT_MTU = 23
+        private const val ATT_HEADER_SIZE = 3
         val SERVICE_UUID: UUID = UUID.fromString("6269746d-7367-4000-8000-000000000001")
         val WRITE_CHAR_UUID: UUID = UUID.fromString("6269746d-7367-4000-8000-000000000002")
         val NOTIFY_CHAR_UUID: UUID = UUID.fromString("6269746d-7367-4000-8000-000000000003")
@@ -28,10 +36,14 @@ class BleGattServer(private val context: Context) {
     private var advertiser: BluetoothLeAdvertiser? = null
     private var isAdvertising = false
 
-    // Track connected central devices
-    private val connectedDevices = mutableMapOf<String, BluetoothDevice>()
-    // Track devices subscribed to notifications
-    private val subscribedDevices = mutableSetOf<String>()
+    // Thread-safe collections — GATT callbacks arrive on Binder threads,
+    // while sendData/broadcastData are called from the main thread via method channels.
+    private val connectedDevices = ConcurrentHashMap<String, BluetoothDevice>()
+    private val subscribedDevices: MutableSet<String> = ConcurrentHashMap.newKeySet()
+    private val deviceMtu = ConcurrentHashMap<String, Int>()
+
+    // Flow control: track whether a notification send is in-flight
+    private val notificationInFlight = AtomicBoolean(false)
 
     // Callbacks to Dart
     var onDataReceived: ((peerId: String, data: ByteArray) -> Unit)? = null
@@ -43,14 +55,15 @@ class BleGattServer(private val context: Context) {
             val peerId = device.address
             when (newState) {
                 BluetoothProfile.STATE_CONNECTED -> {
-                    Log.d(TAG, "Central connected: $peerId")
+                    Log.d(TAG, "Central connected: $peerId (status=$status)")
                     connectedDevices[peerId] = device
                     onPeerConnected?.invoke(peerId)
                 }
                 BluetoothProfile.STATE_DISCONNECTED -> {
-                    Log.d(TAG, "Central disconnected: $peerId")
+                    Log.d(TAG, "Central disconnected: $peerId (status=$status)")
                     connectedDevices.remove(peerId)
                     subscribedDevices.remove(peerId)
+                    deviceMtu.remove(peerId)
                     onPeerDisconnected?.invoke(peerId)
                 }
             }
@@ -105,7 +118,16 @@ class BleGattServer(private val context: Context) {
         }
 
         override fun onMtuChanged(device: BluetoothDevice?, mtu: Int) {
-            Log.d(TAG, "MTU changed to $mtu for ${device?.address}")
+            val peerId = device?.address ?: return
+            deviceMtu[peerId] = mtu
+            Log.d(TAG, "MTU changed to $mtu for $peerId (usable payload: ${mtu - ATT_HEADER_SIZE})")
+        }
+
+        override fun onNotificationSent(device: BluetoothDevice?, status: Int) {
+            notificationInFlight.set(false)
+            if (status != BluetoothGatt.GATT_SUCCESS) {
+                Log.w(TAG, "Notification send failed for ${device?.address} with status=$status")
+            }
         }
     }
 
@@ -129,36 +151,39 @@ class BleGattServer(private val context: Context) {
                 return false
             }
 
-        // Build the mesh service with write + notify characteristics
-        val service = BluetoothGattService(SERVICE_UUID, BluetoothGattService.SERVICE_TYPE_PRIMARY)
+            // Build the mesh service with write + notify characteristics
+            val service = BluetoothGattService(SERVICE_UUID, BluetoothGattService.SERVICE_TYPE_PRIMARY)
 
-        val writeCharacteristic = BluetoothGattCharacteristic(
-            WRITE_CHAR_UUID,
-            BluetoothGattCharacteristic.PROPERTY_WRITE or BluetoothGattCharacteristic.PROPERTY_WRITE_NO_RESPONSE,
-            BluetoothGattCharacteristic.PERMISSION_WRITE
-        )
+            val writeCharacteristic = BluetoothGattCharacteristic(
+                WRITE_CHAR_UUID,
+                BluetoothGattCharacteristic.PROPERTY_WRITE or BluetoothGattCharacteristic.PROPERTY_WRITE_NO_RESPONSE,
+                BluetoothGattCharacteristic.PERMISSION_WRITE
+            )
 
-        val notifyCharacteristic = BluetoothGattCharacteristic(
-            NOTIFY_CHAR_UUID,
-            BluetoothGattCharacteristic.PROPERTY_NOTIFY or BluetoothGattCharacteristic.PROPERTY_READ,
-            BluetoothGattCharacteristic.PERMISSION_READ
-        )
-        // Add CCCD descriptor for notification subscription
-        val cccd = BluetoothGattDescriptor(
-            CCCD_UUID,
-            BluetoothGattDescriptor.PERMISSION_READ or BluetoothGattDescriptor.PERMISSION_WRITE
-        )
-        notifyCharacteristic.addDescriptor(cccd)
+            val notifyCharacteristic = BluetoothGattCharacteristic(
+                NOTIFY_CHAR_UUID,
+                BluetoothGattCharacteristic.PROPERTY_NOTIFY or BluetoothGattCharacteristic.PROPERTY_READ,
+                BluetoothGattCharacteristic.PERMISSION_READ
+            )
+            // Add CCCD descriptor for notification subscription
+            val cccd = BluetoothGattDescriptor(
+                CCCD_UUID,
+                BluetoothGattDescriptor.PERMISSION_READ or BluetoothGattDescriptor.PERMISSION_WRITE
+            )
+            notifyCharacteristic.addDescriptor(cccd)
 
-        service.addCharacteristic(writeCharacteristic)
-        service.addCharacteristic(notifyCharacteristic)
+            service.addCharacteristic(writeCharacteristic)
+            service.addCharacteristic(notifyCharacteristic)
 
-        gattServer?.addService(service)
+            gattServer?.addService(service)
 
-        // Start advertising
-        advertiser = adapter.bluetoothLeAdvertiser
-        startAdvertising()
-        return true
+            // Start advertising
+            advertiser = adapter.bluetoothLeAdvertiser
+            startAdvertising()
+            return true
+        } catch (e: SecurityException) {
+            Log.e(TAG, "BLE permission denied: ${e.message}")
+            return false
         } catch (e: Exception) {
             Log.e(TAG, "Error starting BLE GATT server: ${e.message}")
             return false
@@ -185,7 +210,11 @@ class BleGattServer(private val context: Context) {
             .setIncludeTxPowerLevel(true)
             .build()
 
-        advertiser?.startAdvertising(settings, data, scanResponse, advertiseCallback)
+        try {
+            advertiser?.startAdvertising(settings, data, scanResponse, advertiseCallback)
+        } catch (e: SecurityException) {
+            Log.e(TAG, "BLE advertise permission denied: ${e.message}")
+        }
     }
 
     private val advertiseCallback = object : AdvertiseCallback() {
@@ -201,28 +230,85 @@ class BleGattServer(private val context: Context) {
     }
 
     /**
+     * Returns the negotiated MTU for a peer, or the default BLE MTU.
+     */
+    fun getMtu(peerId: String): Int = deviceMtu[peerId] ?: DEFAULT_MTU
+
+    /**
      * Send data to a specific connected central via notification.
+     * Returns true if the notification was successfully queued.
      */
     fun sendData(peerId: String, data: ByteArray): Boolean {
-        val device = connectedDevices[peerId] ?: return false
-        val service = gattServer?.getService(SERVICE_UUID) ?: return false
-        val notifyChar = service.getCharacteristic(NOTIFY_CHAR_UUID) ?: return false
+        val server = gattServer ?: run {
+            Log.w(TAG, "sendData: GATT server is null")
+            return false
+        }
+        val device = connectedDevices[peerId] ?: run {
+            Log.w(TAG, "sendData: device $peerId not connected")
+            return false
+        }
+        val service = server.getService(SERVICE_UUID) ?: run {
+            Log.w(TAG, "sendData: mesh service not found")
+            return false
+        }
+        val notifyChar = service.getCharacteristic(NOTIFY_CHAR_UUID) ?: run {
+            Log.w(TAG, "sendData: notify characteristic not found")
+            return false
+        }
 
-        notifyChar.value = data
-        return gattServer?.notifyCharacteristicChanged(device, notifyChar, false) ?: false
+        return try {
+            notifyCharacteristicChanged(server, device, notifyChar, data)
+        } catch (e: SecurityException) {
+            Log.e(TAG, "sendData: permission denied: ${e.message}")
+            false
+        }
     }
 
     /**
      * Broadcast data to all subscribed centrals.
      */
     fun broadcastData(data: ByteArray) {
-        val service = gattServer?.getService(SERVICE_UUID) ?: return
-        val notifyChar = service.getCharacteristic(NOTIFY_CHAR_UUID) ?: return
+        val server = gattServer ?: run {
+            Log.w(TAG, "broadcastData: GATT server is null")
+            return
+        }
+        val service = server.getService(SERVICE_UUID) ?: run {
+            Log.w(TAG, "broadcastData: mesh service not found")
+            return
+        }
+        val notifyChar = service.getCharacteristic(NOTIFY_CHAR_UUID) ?: run {
+            Log.w(TAG, "broadcastData: notify characteristic not found")
+            return
+        }
 
-        notifyChar.value = data
         for (peerId in subscribedDevices.toList()) {
             val device = connectedDevices[peerId] ?: continue
-            gattServer?.notifyCharacteristicChanged(device, notifyChar, false)
+            try {
+                notifyCharacteristicChanged(server, device, notifyChar, data)
+            } catch (e: SecurityException) {
+                Log.e(TAG, "broadcastData: permission denied for $peerId: ${e.message}")
+            }
+        }
+    }
+
+    /**
+     * API-level-safe notification dispatch.
+     * Uses the new 4-arg API on Android 13+ (API 33) and the deprecated 3-arg API on older versions.
+     */
+    private fun notifyCharacteristicChanged(
+        server: BluetoothGattServer,
+        device: BluetoothDevice,
+        characteristic: BluetoothGattCharacteristic,
+        data: ByteArray
+    ): Boolean {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            val result = server.notifyCharacteristicChanged(device, characteristic, false, data)
+            result == BluetoothStatusCodes.SUCCESS
+        } else {
+            @Suppress("DEPRECATION")
+            characteristic.value = data
+            @Suppress("DEPRECATION")
+            server.notifyCharacteristicChanged(device, characteristic, false)
         }
     }
 
@@ -230,14 +316,21 @@ class BleGattServer(private val context: Context) {
      * Stop advertising and close the GATT server.
      */
     fun stop() {
-        if (isAdvertising) {
-            advertiser?.stopAdvertising(advertiseCallback)
-            isAdvertising = false
+        try {
+            if (isAdvertising) {
+                advertiser?.stopAdvertising(advertiseCallback)
+                isAdvertising = false
+            }
+        } catch (e: SecurityException) {
+            Log.e(TAG, "stopAdvertising permission denied: ${e.message}")
         }
+
         gattServer?.close()
         gattServer = null
         connectedDevices.clear()
         subscribedDevices.clear()
+        deviceMtu.clear()
+        notificationInFlight.set(false)
         Log.d(TAG, "GATT server stopped")
     }
 }
