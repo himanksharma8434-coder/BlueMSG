@@ -92,6 +92,8 @@ class MeshService extends ChangeNotifier {
     }
 
     _setupProtocolEngines();
+    // One-time migration: clean up legacy MAC-address peer entries
+    await _cleanupLegacyPeers();
     await _startMeshTransport();
     _isInitialized = true;
     notifyListeners();
@@ -149,6 +151,7 @@ class MeshService extends ChangeNotifier {
 
       // Attempt store-and-forward outbox delivery
       _flushPendingMessagesForPeer(peer.peerId);
+      _flushBroadcastPendingMessages();
       notifyListeners();
     }));
 
@@ -204,13 +207,6 @@ class MeshService extends ChangeNotifier {
 
   /// Process fully verified and assembled envelope for local display & storage.
   Future<void> _processIncomingMessage(MessageEnvelope envelope) async {
-    // Clean up temporary MAC address entries in SQLite peer repo
-    final legacyPeers = await peerRepo.getAllPeers();
-    for (final p in legacyPeers) {
-      if (p.deviceId.contains(':')) {
-        await peerRepo.deletePeer(p.deviceId);
-      }
-    }
 
     final existingPeer = await peerRepo.getPeerById(envelope.senderId);
 
@@ -290,6 +286,10 @@ class MeshService extends ChangeNotifier {
   }
 
   /// Signature verification callback used by RelayEngine.
+  ///
+  /// Uses Trust-On-First-Use (TOFU): unknown peers are accepted to allow
+  /// initial key exchange, but known peers with stored keys must pass
+  /// Ed25519 signature verification. Crypto errors reject the message.
   Future<bool> _verifyMessageSignature({
     required String senderId,
     required Uint8List signableBytes,
@@ -297,7 +297,9 @@ class MeshService extends ChangeNotifier {
   }) async {
     final peer = await peerRepo.getPeerById(senderId);
     if (peer == null || peer.publicKeyBytes.length < 32) {
-      return true; // Accept signatures for un-saved peers or incomplete keys
+      // TOFU: Accept first message from unknown peers to allow key exchange
+      debugPrint('Signature: TOFU accept for unknown/incomplete peer $senderId');
+      return true;
     }
 
     try {
@@ -310,8 +312,9 @@ class MeshService extends ChangeNotifier {
         signatureBytes: signature,
         publicKey: publicKey,
       );
-    } catch (_) {
-      return true; // Allow message processing
+    } catch (e) {
+      debugPrint('Signature verification error for $senderId: $e');
+      return false; // Reject messages with invalid/corrupt signatures
     }
   }
 
@@ -448,10 +451,46 @@ class MeshService extends ChangeNotifier {
           await transport.send(peerId, c.toBytes());
         }
         await pendingRepo.remove(pending.messageId);
-        await messageRepo.updateStatus(pending.messageId, DeliveryStatus.delivered);
+        await messageRepo.updateStatus(pending.messageId, DeliveryStatus.sent);
       } catch (_) {
         await pendingRepo.markAttempt(pending.messageId);
       }
+    }
+  }
+
+  /// Flushes pending broadcast messages when any peer becomes available.
+  Future<void> _flushBroadcastPendingMessages() async {
+    if (transport.connectedPeers.isEmpty) return;
+
+    final pendingList = await pendingRepo.getForRecipient('broadcast');
+    for (final pending in pendingList) {
+      try {
+        final chunks = Chunker.chunkEnvelope(
+          messageId: pending.messageId,
+          payloadBytes: pending.envelopeBytes,
+        );
+        for (final c in chunks) {
+          await transport.broadcast(c.toBytes());
+        }
+        await pendingRepo.remove(pending.messageId);
+        await messageRepo.updateStatus(pending.messageId, DeliveryStatus.sent);
+      } catch (_) {
+        await pendingRepo.markAttempt(pending.messageId);
+      }
+    }
+  }
+
+  /// One-time migration: remove MAC-address-based peer entries from earlier versions.
+  Future<void> _cleanupLegacyPeers() async {
+    try {
+      final legacyPeers = await peerRepo.getAllPeers();
+      for (final p in legacyPeers) {
+        if (p.deviceId.contains(':')) {
+          await peerRepo.deletePeer(p.deviceId);
+        }
+      }
+    } catch (e) {
+      debugPrint('Legacy peer cleanup error: $e');
     }
   }
 
@@ -477,6 +516,10 @@ class MeshService extends ChangeNotifier {
 
   @override
   void dispose() {
+    for (final sub in _transportSubs) {
+      sub.cancel();
+    }
+    _transportSubs.clear();
     transport.dispose();
     _messageReceivedCtrl.close();
     _nearbyPeersCtrl.close();

@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:typed_data';
 import 'package:uuid/uuid.dart';
 
@@ -72,15 +73,19 @@ class MessageEnvelope {
 
   /// Utility to get bytes to sign or verify signature against.
   /// Standardized format: messageId | senderId | senderNickname | recipientId | ttl | timestamp | payload
+  ///
+  /// Uses UTF-8 encoding (not Dart's UTF-16 codeUnits) for cross-platform
+  /// consistency. Safe for ASCII UUIDs; fixes potential mismatch for
+  /// non-ASCII nicknames (emoji, accented characters, etc.).
   Uint8List getSignableBytes() {
     final builder = BytesBuilder();
-    builder.add(Uint8List.fromList(messageId.codeUnits));
-    builder.add(Uint8List.fromList(senderId.codeUnits));
+    builder.add(Uint8List.fromList(utf8.encode(messageId)));
+    builder.add(Uint8List.fromList(utf8.encode(senderId)));
     if (senderNickname != null) {
-      builder.add(Uint8List.fromList(senderNickname!.codeUnits));
+      builder.add(Uint8List.fromList(utf8.encode(senderNickname!)));
     }
     if (recipientId != null) {
-      builder.add(Uint8List.fromList(recipientId!.codeUnits));
+      builder.add(Uint8List.fromList(utf8.encode(recipientId!)));
     }
     final ttlByte = Uint8List(1)..[0] = ttl & 0xFF;
     builder.add(ttlByte);

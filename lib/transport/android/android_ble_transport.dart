@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:typed_data';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:permission_handler/permission_handler.dart';
@@ -22,6 +23,7 @@ class AndroidBleTransport implements Transport {
   bool _isActive = false;
   final Set<String> _connectedPeers = {};
   final Map<String, BluetoothDevice> _fbpDevices = {};
+  final Map<String, int> _peerMtu = {}; // Per-peer negotiated MTU
 
   // Stream controllers
   final StreamController<({String peerId, Uint8List data})> _incomingDataCtrl =
@@ -35,6 +37,11 @@ class AndroidBleTransport implements Transport {
   StreamSubscription? _scanSubscription;
   StreamSubscription? _peripheralEventSubscription;
   final Map<String, StreamSubscription> _notifySubscriptions = {};
+  final Map<String, StreamSubscription> _connectionStateSubscriptions = {};
+
+  // Reconnection tracking
+  final Map<String, int> _reconnectAttempts = {};
+  static const int _maxReconnectAttempts = 3;
 
   @override
   bool get isActive => _isActive;
@@ -75,12 +82,13 @@ class AndroidBleTransport implements Transport {
     try {
       final hasPermission = await requestPermissions();
       if (!hasPermission) {
+        debugPrint('BLE: Permissions not granted for advertising');
         return;
       }
       await _methodChannel.invokeMethod('startAdvertising');
       _listenToPeripheralEvents();
     } catch (e) {
-      // Gracefully log advertising failure (e.g. Bluetooth turned off or unsupported)
+      debugPrint('BLE: Failed to start advertising: $e');
     }
   }
 
@@ -112,6 +120,7 @@ class AndroidBleTransport implements Transport {
         case 'peerConnected':
           final peerId = event['peerId'] as String? ?? 'unknown';
           _connectedPeers.add(peerId);
+          _reconnectAttempts.remove(peerId);
           _peerDiscoveredCtrl.add(DiscoveredPeer(
             peerId: peerId,
             discoveredAt: DateTime.now(),
@@ -121,10 +130,13 @@ class AndroidBleTransport implements Transport {
         case 'peerDisconnected':
           final peerId = event['peerId'] as String? ?? 'unknown';
           _connectedPeers.remove(peerId);
+          _peerMtu.remove(peerId);
           _peerLostCtrl.add(peerId);
           break;
       }
-    }, onError: (_) {});
+    }, onError: (e) {
+      debugPrint('BLE: Peripheral event error: $e');
+    });
   }
 
   // ── Scanning (Central Mode — flutter_blue_plus) ──────────────────────
@@ -135,7 +147,10 @@ class AndroidBleTransport implements Transport {
 
     try {
       final hasPermission = await requestPermissions();
-      if (!hasPermission) return;
+      if (!hasPermission) {
+        debugPrint('BLE: Permissions not granted for scanning');
+        return;
+      }
 
       _scanSubscription?.cancel();
       _scanSubscription = FlutterBluePlus.onScanResults.listen(
@@ -144,10 +159,12 @@ class AndroidBleTransport implements Transport {
             _handleScanResult(result);
           }
         },
-        onError: (_) {},
+        onError: (e) {
+          debugPrint('BLE: Scan error: $e');
+        },
       );
 
-      // Start BLE scan (try filtering by service UUID first, then un-filtered for maximum compatibility)
+      // Start BLE scan filtered by our service UUID
       try {
         await FlutterBluePlus.startScan(
           withServices: [Guid(BleConstants.serviceUuid)],
@@ -155,7 +172,8 @@ class AndroidBleTransport implements Transport {
           continuousUpdates: true,
           continuousDivisor: 1,
         );
-      } catch (_) {
+      } catch (e) {
+        debugPrint('BLE: Filtered scan failed ($e), falling back to unfiltered');
         // Fallback to unfiltered scan if hardware filter fails
         await FlutterBluePlus.startScan(
           androidUsesFineLocation: true,
@@ -163,7 +181,9 @@ class AndroidBleTransport implements Transport {
           continuousDivisor: 1,
         );
       }
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('BLE: Failed to start scanning: $e');
+    }
   }
 
   @override
@@ -206,22 +226,34 @@ class AndroidBleTransport implements Transport {
 
   final Map<String, BluetoothCharacteristic> _writeCharacteristics = {};
 
-  /// Connect to a discovered peer, discover the mesh service, subscribe to notifications.
+  /// Connect to a discovered peer, negotiate MTU, discover the mesh service,
+  /// subscribe to notifications.
   Future<void> _connectAndDiscover(BluetoothDevice device, String peerId) async {
     try {
       await device.connect(autoConnect: false, timeout: const Duration(seconds: 10));
 
+      // Cancel any existing connection state subscription to prevent leaks (HIGH-3)
+      _connectionStateSubscriptions[peerId]?.cancel();
+
       // Listen for disconnection
-      device.connectionState.listen((state) {
+      _connectionStateSubscriptions[peerId] = device.connectionState.listen((state) {
         if (state == BluetoothConnectionState.disconnected) {
-          _connectedPeers.remove(peerId);
-          _fbpDevices.remove(peerId);
-          _writeCharacteristics.remove(peerId);
-          _notifySubscriptions[peerId]?.cancel();
-          _notifySubscriptions.remove(peerId);
+          _cleanupPeer(peerId);
           _peerLostCtrl.add(peerId);
+          // Attempt reconnection with exponential backoff (HIGH-2)
+          _scheduleReconnect(device, peerId);
         }
       });
+
+      // Negotiate MTU — request maximum, the stack will negotiate down (HIGH-1)
+      try {
+        final mtu = await device.requestMtu(512);
+        _peerMtu[peerId] = mtu;
+        debugPrint('BLE: Negotiated MTU=$mtu for $peerId');
+      } catch (e) {
+        debugPrint('BLE: MTU negotiation failed for $peerId: $e');
+        _peerMtu[peerId] = 23; // Default BLE MTU
+      }
 
       final services = await device.discoverServices();
       for (final service in services) {
@@ -249,42 +281,92 @@ class AndroidBleTransport implements Transport {
           break; // Found our service, done
         }
       }
+
+      // Reset reconnection counter on successful connection
+      _reconnectAttempts.remove(peerId);
     } catch (e) {
-      // Connection failed — remove peer
-      _connectedPeers.remove(peerId);
-      _fbpDevices.remove(peerId);
-      _writeCharacteristics.remove(peerId);
+      debugPrint('BLE: Connection failed for $peerId: $e');
+      _cleanupPeer(peerId);
     }
+  }
+
+  /// Clean up all state associated with a disconnected peer.
+  void _cleanupPeer(String peerId) {
+    _connectedPeers.remove(peerId);
+    _fbpDevices.remove(peerId);
+    _writeCharacteristics.remove(peerId);
+    _peerMtu.remove(peerId);
+    _notifySubscriptions[peerId]?.cancel();
+    _notifySubscriptions.remove(peerId);
+    _connectionStateSubscriptions[peerId]?.cancel();
+    _connectionStateSubscriptions.remove(peerId);
+  }
+
+  /// Schedule a reconnection attempt with exponential backoff (HIGH-2).
+  void _scheduleReconnect(BluetoothDevice device, String peerId) {
+    final attempts = _reconnectAttempts[peerId] ?? 0;
+    if (attempts >= _maxReconnectAttempts) {
+      debugPrint('BLE: Max reconnect attempts reached for $peerId');
+      _reconnectAttempts.remove(peerId);
+      return;
+    }
+
+    _reconnectAttempts[peerId] = attempts + 1;
+    final delaySeconds = (1 << attempts).clamp(1, 8); // 1s, 2s, 4s
+
+    Future.delayed(Duration(seconds: delaySeconds), () async {
+      if (_connectedPeers.contains(peerId)) return; // Already reconnected via scan
+      debugPrint('BLE: Reconnect attempt ${attempts + 1}/$_maxReconnectAttempts for $peerId');
+      try {
+        _fbpDevices[peerId] = device;
+        await _connectAndDiscover(device, peerId);
+      } catch (e) {
+        debugPrint('BLE: Reconnect failed for $peerId: $e');
+      }
+    });
+  }
+
+  /// Get the negotiated MTU for a peer. Defaults to 23 if unknown.
+  int getMtuForPeer(String peerId) {
+    return _peerMtu[peerId] ?? 23;
   }
 
   // ── Sending Data ─────────────────────────────────────────────────────
 
   @override
   Future<void> send(String peerId, Uint8List data) async {
-    // 1. Try central-mode write if peerId is a connected MAC address
+    // 1. Try central-mode write if peerId is a connected MAC address with cached characteristic
     final device = _fbpDevices[peerId];
-    if (device != null) {
+    if (device != null && _writeCharacteristics.containsKey(peerId)) {
       try {
         await _writeViaCentral(device, data);
         return;
-      } catch (_) {}
+      } catch (e) {
+        debugPrint('BLE: Central-mode send failed for $peerId: $e');
+      }
     }
 
     // 2. Try sending via native peripheral-side (peer connected to our GATT server)
     try {
       await _writeViaPeripheral(peerId, data);
-    } catch (_) {}
+      return;
+    } catch (e) {
+      debugPrint('BLE: Peripheral-mode send failed for $peerId: $e');
+    }
 
-    // 3. Flood to all connected BLE links (the recipient's deviceId won't match any MAC,
-    //    so we push the envelope to every link and let the protocol layer filter)
+    // 3. Mesh flood fallback: The peerId is a mesh deviceId (UUID) that doesn't map
+    //    to any known BLE MAC address. Push the envelope to every connected BLE link
+    //    and let the protocol layer (dedup cache + relay engine) handle delivery.
+    //    This is the expected path for multi-hop messages where sender ≠ direct neighbor.
     try {
       await _methodChannel.invokeMethod('broadcastData', {'data': data});
     } catch (_) {}
 
     final peers = List<String>.from(_connectedPeers);
     for (final pid in peers) {
+      if (pid == peerId) continue; // Already tried direct above
       final dev = _fbpDevices[pid];
-      if (dev != null) {
+      if (dev != null && _writeCharacteristics.containsKey(pid)) {
         try {
           await _writeViaCentral(dev, data);
         } catch (_) {}
@@ -299,11 +381,11 @@ class AndroidBleTransport implements Transport {
       await _methodChannel.invokeMethod('broadcastData', {'data': data});
     } catch (_) {}
 
-    // 2. Write to all connected central-mode devices directly (no recursion)
+    // 2. Write to all connected central-mode devices directly
     final peers = List<String>.from(_connectedPeers);
     for (final peerId in peers) {
       final device = _fbpDevices[peerId];
-      if (device != null) {
+      if (device != null && _writeCharacteristics.containsKey(peerId)) {
         try {
           await _writeViaCentral(device, data);
         } catch (_) {}
@@ -312,30 +394,16 @@ class AndroidBleTransport implements Transport {
   }
 
   /// Write data to a peer's GATT server writable characteristic (central mode).
+  /// Only uses cached characteristic — does NOT re-discover services (MED-10 fix).
   Future<void> _writeViaCentral(BluetoothDevice device, Uint8List data) async {
     final peerId = device.remoteId.str;
-    var char = _writeCharacteristics[peerId];
-
-    if (char == null) {
-      final services = await device.discoverServices();
-      for (final service in services) {
-        if (service.uuid.str.toLowerCase() == BleConstants.serviceUuid.toLowerCase()) {
-          for (final c in service.characteristics) {
-            if (c.uuid.str.toLowerCase() == BleConstants.writeCharUuid.toLowerCase()) {
-              char = c;
-              _writeCharacteristics[peerId] = c;
-              break;
-            }
-          }
-        }
-      }
-    }
+    final char = _writeCharacteristics[peerId];
 
     if (char != null) {
       await char.write(data, withoutResponse: true);
       return;
     }
-    throw Exception('Mesh write characteristic not found on peer $peerId');
+    throw Exception('Mesh write characteristic not cached for peer $peerId');
   }
 
   /// Write data via native peripheral channel (GATT server notifying a connected central).
@@ -380,10 +448,18 @@ class AndroidBleTransport implements Transport {
     await stopAdvertising();
 
     _peripheralEventSubscription?.cancel();
+
     for (final sub in _notifySubscriptions.values) {
       sub.cancel();
     }
     _notifySubscriptions.clear();
+
+    for (final sub in _connectionStateSubscriptions.values) {
+      sub.cancel();
+    }
+    _connectionStateSubscriptions.clear();
+
+    _reconnectAttempts.clear();
 
     // Disconnect all central-mode connections
     for (final device in _fbpDevices.values) {
@@ -393,6 +469,7 @@ class AndroidBleTransport implements Transport {
     }
     _fbpDevices.clear();
     _connectedPeers.clear();
+    _peerMtu.clear();
 
     await _incomingDataCtrl.close();
     await _peerDiscoveredCtrl.close();
