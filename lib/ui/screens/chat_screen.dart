@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../../services/mesh_service.dart';
 import '../../storage/models/stored_message.dart';
@@ -26,6 +27,7 @@ class _ChatScreenState extends State<ChatScreen> {
   final ScrollController _scrollController = ScrollController();
   List<StoredMessage> _messages = [];
   bool _isLoading = true;
+  bool _showScrollToBottom = false;
   StreamSubscription? _msgSubscription;
 
   bool get isBroadcast => widget.conversationId == 'broadcast';
@@ -34,6 +36,17 @@ class _ChatScreenState extends State<ChatScreen> {
   void initState() {
     super.initState();
     _loadHistory();
+
+    _scrollController.addListener(() {
+      if (_scrollController.hasClients) {
+        final show = _scrollController.offset > 200;
+        if (show != _showScrollToBottom) {
+          setState(() {
+            _showScrollToBottom = show;
+          });
+        }
+      }
+    });
 
     // Listen to real-time incoming messages
     _msgSubscription = widget.meshService.onMessageReceived.listen((msg) {
@@ -85,6 +98,7 @@ class _ChatScreenState extends State<ChatScreen> {
     final text = _textController.text.trim();
     if (text.isEmpty) return;
 
+    HapticFeedback.lightImpact();
     _textController.clear();
 
     await widget.meshService.sendMessage(
@@ -98,8 +112,18 @@ class _ChatScreenState extends State<ChatScreen> {
     if (_scrollController.hasClients) {
       _scrollController.animateTo(
         0.0,
-        duration: const Duration(milliseconds: 200),
-        curve: Curves.easeOut,
+        duration: const Duration(milliseconds: 250),
+        curve: Curves.easeOutCubic,
+      );
+    }
+  }
+
+  void _scrollToBottom() {
+    if (_scrollController.hasClients) {
+      _scrollController.animateTo(
+        0.0,
+        duration: const Duration(milliseconds: 300),
+        curve: Curves.easeOutCubic,
       );
     }
   }
@@ -115,26 +139,35 @@ class _ChatScreenState extends State<ChatScreen> {
         title: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(widget.peerNickname),
+            Text(
+              widget.peerNickname,
+              style: const TextStyle(fontSize: 17, fontWeight: FontWeight.bold),
+            ),
             Row(
               children: [
-                Icon(
-                  isBroadcast
-                      ? Icons.cell_tower_rounded
-                      : (isPeerConnected ? Icons.bluetooth_connected : Icons.schedule),
-                  size: 12,
-                  color: isPeerConnected ? AppTheme.accentMint : AppTheme.accentAmber,
+                Container(
+                  width: 6,
+                  height: 6,
+                  decoration: BoxDecoration(
+                    color: isPeerConnected
+                        ? AppTheme.accentMint
+                        : AppTheme.accentAmber,
+                    shape: BoxShape.circle,
+                  ),
                 ),
-                const SizedBox(width: 4),
+                const SizedBox(width: 6),
                 Text(
                   isBroadcast
-                      ? 'Public Broadcast'
+                      ? 'Public Broadcast Channel'
                       : (isPeerConnected
                           ? 'Connected in BLE Range'
                           : 'Store & Forward Outbox'),
                   style: TextStyle(
                     fontSize: 11,
-                    color: isPeerConnected ? AppTheme.accentMint : AppTheme.accentAmber,
+                    fontWeight: FontWeight.w500,
+                    color: isPeerConnected
+                        ? AppTheme.accentMint
+                        : AppTheme.accentAmber,
                   ),
                 ),
               ],
@@ -142,96 +175,159 @@ class _ChatScreenState extends State<ChatScreen> {
           ],
         ),
       ),
-      body: Column(
+      body: Stack(
         children: [
-          // Security / E2E Header Banner
-          Container(
-            width: double.infinity,
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-            color: AppTheme.surface,
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Icon(
-                  isBroadcast ? Icons.public : Icons.lock_outline_rounded,
-                  size: 14,
-                  color: isBroadcast ? AppTheme.primaryPurple : AppTheme.primaryCyan,
-                ),
-                const SizedBox(width: 6),
-                Text(
-                  isBroadcast
-                      ? 'Broadcast messages are cleartext & signed by sender'
-                      : 'End-to-End Encrypted via X25519 + ChaCha20-Poly1305',
-                  style: TextStyle(
-                    fontSize: 11,
-                    color: isBroadcast ? AppTheme.primaryPurple : AppTheme.primaryCyan,
+          Column(
+            children: [
+              // Security / E2E Header Banner
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                decoration: BoxDecoration(
+                  color: AppTheme.surface.withValues(alpha: 0.8),
+                  border: const Border(
+                    bottom: BorderSide(color: AppTheme.cardBorder, width: 0.5),
                   ),
                 ),
-              ],
-            ),
-          ),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(
+                      isBroadcast ? Icons.public : Icons.lock_outline_rounded,
+                      size: 13,
+                      color: isBroadcast
+                          ? AppTheme.primaryPurple
+                          : AppTheme.primaryCyan,
+                    ),
+                    const SizedBox(width: 6),
+                    Text(
+                      isBroadcast
+                          ? 'Broadcast messages are cleartext & signed by sender'
+                          : 'End-to-End Encrypted via X25519 + ChaCha20-Poly1305',
+                      style: TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w500,
+                        color: isBroadcast
+                            ? AppTheme.primaryPurple
+                            : AppTheme.primaryCyan,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
 
-          // Message Timeline List
-          Expanded(
-            child: _isLoading
-                ? const Center(child: CircularProgressIndicator(color: AppTheme.primaryCyan))
-                : _messages.isEmpty
-                    ? Center(
-                        child: Text(
-                          isBroadcast
-                              ? 'No broadcast messages yet.\nType a message to send to all nearby devices.'
-                              : 'No messages yet.\nSend a message to start direct chat.',
-                          textAlign: TextAlign.center,
-                          style: TextStyle(color: Colors.grey[500], fontSize: 13),
+              // Message Timeline List
+              Expanded(
+                child: _isLoading
+                    ? const Center(
+                        child: CircularProgressIndicator(
+                          color: AppTheme.primaryCyan,
                         ),
                       )
-                    : ListView.builder(
-                        controller: _scrollController,
-                        reverse: true, // Newest at bottom
-                        padding: const EdgeInsets.all(16),
-                        itemCount: _messages.length,
-                        itemBuilder: (context, index) {
-                          final msg = _messages[index];
-                          return _buildMessageBubble(msg);
-                        },
+                    : _messages.isEmpty
+                        ? Center(
+                            child: Padding(
+                              padding: const EdgeInsets.all(24),
+                              child: Column(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Icon(
+                                    isBroadcast
+                                        ? Icons.cell_tower_rounded
+                                        : Icons.lock_clock_outlined,
+                                    size: 48,
+                                    color: Colors.grey[600],
+                                  ),
+                                  const SizedBox(height: 12),
+                                  Text(
+                                    isBroadcast
+                                        ? 'No broadcast messages yet.\nType a message to send to all nearby devices.'
+                                        : 'No messages yet.\nSend an encrypted message to start direct chat.',
+                                    textAlign: TextAlign.center,
+                                    style: TextStyle(
+                                      color: Colors.grey[400],
+                                      fontSize: 13,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          )
+                        : ListView.builder(
+                            controller: _scrollController,
+                            reverse: true, // Newest at bottom
+                            padding: const EdgeInsets.all(16),
+                            itemCount: _messages.length,
+                            itemBuilder: (context, index) {
+                              final msg = _messages[index];
+                              return _buildMessageBubble(msg);
+                            },
+                          ),
+              ),
+
+              // Message Input Bar
+              Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 12,
+                ),
+                decoration: const BoxDecoration(
+                  color: AppTheme.surface,
+                  border: Border(top: BorderSide(color: AppTheme.cardBorder)),
+                ),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: TextField(
+                        controller: _textController,
+                        decoration: InputDecoration(
+                          hintText: isBroadcast
+                              ? 'Broadcast to mesh...'
+                              : 'Send encrypted message...',
+                          hintStyle: TextStyle(
+                            color: Colors.grey[500],
+                            fontSize: 14,
+                          ),
+                        ),
+                        onSubmitted: (_) => _sendMessage(),
                       ),
+                    ),
+                    const SizedBox(width: 10),
+                    Container(
+                      width: 48,
+                      height: 48,
+                      decoration: BoxDecoration(
+                        gradient: AppTheme.primaryGradient,
+                        shape: BoxShape.circle,
+                        boxShadow: AppTheme.cyanGlow(blur: 10, opacity: 0.3),
+                      ),
+                      child: IconButton(
+                        icon: const Icon(
+                          Icons.send_rounded,
+                          color: Colors.black,
+                          size: 20,
+                        ),
+                        onPressed: _sendMessage,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
           ),
 
-          // Message Input Bar
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-            decoration: const BoxDecoration(
-              color: AppTheme.surface,
-              border: Border(top: BorderSide(color: AppTheme.cardBorder)),
+          // Scroll-to-bottom FAB
+          if (_showScrollToBottom)
+            Positioned(
+              right: 16,
+              bottom: 80,
+              child: FloatingActionButton.small(
+                onPressed: _scrollToBottom,
+                backgroundColor: AppTheme.surfaceLight,
+                foregroundColor: AppTheme.primaryCyan,
+                child: const Icon(Icons.arrow_downward_rounded),
+              ),
             ),
-            child: Row(
-              children: [
-                Expanded(
-                  child: TextField(
-                    controller: _textController,
-                    decoration: InputDecoration(
-                      hintText: isBroadcast
-                          ? 'Broadcast to mesh...'
-                          : 'Send encrypted message...',
-                      hintStyle: TextStyle(color: Colors.grey[500], fontSize: 14),
-                    ),
-                    onSubmitted: (_) => _sendMessage(),
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Container(
-                  decoration: const BoxDecoration(
-                    gradient: AppTheme.primaryGradient,
-                    shape: BoxShape.circle,
-                  ),
-                  child: IconButton(
-                    icon: const Icon(Icons.send_rounded, color: Colors.black),
-                    onPressed: _sendMessage,
-                  ),
-                ),
-              ],
-            ),
-          ),
         ],
       ),
     );
@@ -243,22 +339,42 @@ class _ChatScreenState extends State<ChatScreen> {
     return Align(
       alignment: isMe ? Alignment.centerRight : Alignment.centerLeft,
       child: Container(
-        margin: const EdgeInsets.only(bottom: 12),
+        margin: const EdgeInsets.only(bottom: 10),
         constraints: BoxConstraints(
-          maxWidth: MediaQuery.of(context).size.width * 0.75,
+          maxWidth: MediaQuery.of(context).size.width * 0.78,
         ),
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
         decoration: BoxDecoration(
           color: isMe ? AppTheme.surfaceLight : AppTheme.surface,
+          gradient: isMe
+              ? LinearGradient(
+                  colors: [
+                    AppTheme.primaryPurple.withValues(alpha: 0.25),
+                    AppTheme.surfaceLight,
+                  ],
+                  begin: Alignment.topRight,
+                  end: Alignment.bottomLeft,
+                )
+              : null,
           borderRadius: BorderRadius.only(
-            topLeft: const Radius.circular(16),
-            topRight: const Radius.circular(16),
-            bottomLeft: Radius.circular(isMe ? 16 : 4),
-            bottomRight: Radius.circular(isMe ? 4 : 16),
+            topLeft: const Radius.circular(18),
+            topRight: const Radius.circular(18),
+            bottomLeft: Radius.circular(isMe ? 18 : 4),
+            bottomRight: Radius.circular(isMe ? 4 : 18),
           ),
           border: Border.all(
-            color: isMe ? AppTheme.primaryCyan.withOpacity(0.3) : AppTheme.cardBorder,
+            color: isMe
+                ? AppTheme.primaryCyan.withValues(alpha: 0.35)
+                : AppTheme.cardBorder,
           ),
+          boxShadow: isMe
+              ? AppTheme.cyanGlow(blur: 6, opacity: 0.1)
+              : [
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: 0.2),
+                    blurRadius: 4,
+                  ),
+                ],
         ),
         child: Column(
           crossAxisAlignment:
@@ -268,7 +384,8 @@ class _ChatScreenState extends State<ChatScreen> {
               Padding(
                 padding: const EdgeInsets.only(bottom: 4),
                 child: Text(
-                  _peerNicknames[msg.senderId] ?? 'User-${msg.senderId.substring(0, 4)}',
+                  _peerNicknames[msg.senderId] ??
+                      'User-${msg.senderId.substring(0, 4)}',
                   style: const TextStyle(
                     fontSize: 11,
                     fontWeight: FontWeight.bold,
@@ -278,7 +395,11 @@ class _ChatScreenState extends State<ChatScreen> {
               ),
             Text(
               msg.body,
-              style: const TextStyle(fontSize: 14, color: Colors.white),
+              style: const TextStyle(
+                fontSize: 14,
+                color: Colors.white,
+                height: 1.3,
+              ),
             ),
             const SizedBox(height: 4),
             Row(
@@ -303,17 +424,37 @@ class _ChatScreenState extends State<ChatScreen> {
   Widget _buildDeliveryIcon(DeliveryStatus status) {
     switch (status) {
       case DeliveryStatus.pending:
-        return const Icon(Icons.schedule, size: 12, color: AppTheme.accentAmber);
+        return const Icon(
+          Icons.schedule,
+          size: 12,
+          color: AppTheme.accentAmber,
+        );
       case DeliveryStatus.sent:
         return const Icon(Icons.check, size: 12, color: Colors.grey);
       case DeliveryStatus.relayed:
-        return const Icon(Icons.alt_route_rounded, size: 12, color: AppTheme.primaryCyan);
+        return const Icon(
+          Icons.alt_route_rounded,
+          size: 12,
+          color: AppTheme.primaryCyan,
+        );
       case DeliveryStatus.delivered:
-        return const Icon(Icons.done_all, size: 12, color: AppTheme.accentMint);
+        return const Icon(
+          Icons.done_all,
+          size: 12,
+          color: AppTheme.accentMint,
+        );
       case DeliveryStatus.read:
-        return const Icon(Icons.remove_red_eye_rounded, size: 12, color: AppTheme.primaryCyan);
+        return const Icon(
+          Icons.remove_red_eye_rounded,
+          size: 12,
+          color: AppTheme.primaryCyan,
+        );
       case DeliveryStatus.failed:
-        return const Icon(Icons.error_outline, size: 12, color: AppTheme.accentRose);
+        return const Icon(
+          Icons.error_outline,
+          size: 12,
+          color: AppTheme.accentRose,
+        );
     }
   }
 

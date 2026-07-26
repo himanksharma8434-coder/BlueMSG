@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../../services/mesh_service.dart';
 import '../theme/app_theme.dart';
@@ -17,19 +18,28 @@ class ConversationListScreen extends StatefulWidget {
   State<ConversationListScreen> createState() => _ConversationListScreenState();
 }
 
-class _ConversationListScreenState extends State<ConversationListScreen> {
+class _ConversationListScreenState extends State<ConversationListScreen>
+    with SingleTickerProviderStateMixin {
   List<Map<String, dynamic>> _conversations = [];
   bool _isLoading = true;
+
+  late AnimationController _pulseController;
 
   @override
   void initState() {
     super.initState();
+    _pulseController = AnimationController(
+      vsync: this,
+      duration: const Duration(seconds: 2),
+    )..repeat(reverse: true);
+
     _loadConversations();
     widget.meshService.addListener(_onMeshUpdated);
   }
 
   @override
   void dispose() {
+    _pulseController.dispose();
     widget.meshService.removeListener(_onMeshUpdated);
     super.dispose();
   }
@@ -56,9 +66,17 @@ class _ConversationListScreenState extends State<ConversationListScreen> {
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: AppTheme.surface,
-        title: const Text('Edit Your Username'),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: const Row(
+          children: [
+            Icon(Icons.edit_rounded, color: AppTheme.primaryCyan, size: 20),
+            SizedBox(width: 8),
+            Text('Edit Display Name'),
+          ],
+        ),
         content: TextField(
           controller: controller,
+          autofocus: true,
           decoration: const InputDecoration(
             hintText: 'Enter new display name',
           ),
@@ -66,9 +84,13 @@ class _ConversationListScreenState extends State<ConversationListScreen> {
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx),
-            child: const Text('Cancel'),
+            child: const Text('Cancel', style: TextStyle(color: Colors.grey)),
           ),
           ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppTheme.primaryCyan,
+              foregroundColor: Colors.black,
+            ),
             onPressed: () async {
               final newName = controller.text.trim();
               if (newName.isNotEmpty) {
@@ -83,10 +105,32 @@ class _ConversationListScreenState extends State<ConversationListScreen> {
     );
   }
 
+  void _navigateToChat(String conversationId, String peerNickname) {
+    HapticFeedback.selectionClick();
+    Navigator.of(context).push(
+      PageRouteBuilder(
+        transitionDuration: const Duration(milliseconds: 300),
+        reverseTransitionDuration: const Duration(milliseconds: 250),
+        pageBuilder: (_, anim, secondaryAnim) => SlideTransition(
+          position: Tween<Offset>(
+            begin: const Offset(1, 0),
+            end: Offset.zero,
+          ).animate(CurvedAnimation(parent: anim, curve: Curves.easeOutCubic)),
+          child: ChatScreen(
+            meshService: widget.meshService,
+            conversationId: conversationId,
+            peerNickname: peerNickname,
+          ),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final myId = widget.meshService.currentIdentity?.deviceId ?? '----';
-    final myNickname = widget.meshService.currentIdentity?.nickname ?? 'User-${myId.substring(0, 4)}';
+    final myNickname = widget.meshService.currentIdentity?.nickname ??
+        'User-${myId.substring(0, 4)}';
     final nearbyCount = widget.meshService.nearbyPeers.length;
 
     return Scaffold(
@@ -100,6 +144,7 @@ class _ConversationListScreenState extends State<ConversationListScreen> {
                 decoration: BoxDecoration(
                   gradient: AppTheme.primaryGradient,
                   borderRadius: BorderRadius.circular(12),
+                  boxShadow: AppTheme.cyanGlow(blur: 8, opacity: 0.3),
                 ),
                 child: const Icon(Icons.hub_rounded, color: Colors.black, size: 20),
               ),
@@ -114,11 +159,18 @@ class _ConversationListScreenState extends State<ConversationListScreen> {
                           child: Text(
                             myNickname,
                             overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                            style: const TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.bold,
+                            ),
                           ),
                         ),
                         const SizedBox(width: 4),
-                        const Icon(Icons.edit, size: 12, color: AppTheme.primaryCyan),
+                        const Icon(
+                          Icons.edit,
+                          size: 12,
+                          color: AppTheme.primaryCyan,
+                        ),
                       ],
                     ),
                     Text(
@@ -140,159 +192,226 @@ class _ConversationListScreenState extends State<ConversationListScreen> {
             icon: const Icon(Icons.tune_rounded),
             tooltip: 'Mesh Diagnostics',
             onPressed: () {
+              HapticFeedback.selectionClick();
               Navigator.of(context).push(
                 MaterialPageRoute(
-                  builder: (_) => DiagnosticsScreen(meshService: widget.meshService),
+                  builder: (_) => DiagnosticsScreen(
+                    meshService: widget.meshService,
+                  ),
                 ),
               );
             },
           ),
         ],
       ),
-      body: Column(
-        children: [
-          // iOS Background Warning Banner
-          if (!kIsWeb && Platform.isIOS)
+      body: RefreshIndicator(
+        color: AppTheme.primaryCyan,
+        backgroundColor: AppTheme.surface,
+        onRefresh: () async {
+          await _loadConversations();
+        },
+        child: Column(
+          children: [
+            // iOS Background Warning Banner
+            if (!kIsWeb && Platform.isIOS)
+              Container(
+                margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: AppTheme.accentAmber.withValues(alpha: 0.15),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: AppTheme.accentAmber),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(
+                      Icons.info_outline,
+                      color: AppTheme.accentAmber,
+                      size: 20,
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Text(
+                        'iOS Background Mode: Keep bitmsg open for best mesh relay coverage.',
+                        style: TextStyle(fontSize: 12, color: Colors.amber[200]),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+
+            // Mesh Status Header Bar
             Container(
-              margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: AppTheme.accentAmber.withOpacity(0.15),
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: AppTheme.accentAmber),
+              margin: const EdgeInsets.all(16),
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+              decoration: AppTheme.glassDecoration(
+                borderRadius: 16,
+                borderColor: AppTheme.cardBorder,
               ),
               child: Row(
                 children: [
-                  const Icon(Icons.info_outline, color: AppTheme.accentAmber, size: 20),
+                  AnimatedBuilder(
+                    animation: _pulseController,
+                    builder: (context, child) {
+                      return Container(
+                        width: 10,
+                        height: 10,
+                        decoration: BoxDecoration(
+                          color: AppTheme.accentMint,
+                          shape: BoxShape.circle,
+                          boxShadow: [
+                            BoxShadow(
+                              color: AppTheme.accentMint.withValues(
+                                alpha: 0.2 + (_pulseController.value * 0.6),
+                              ),
+                              blurRadius: 6 + (_pulseController.value * 6),
+                              spreadRadius: 1,
+                            ),
+                          ],
+                        ),
+                      );
+                    },
+                  ),
                   const SizedBox(width: 10),
-                  Expanded(
-                    child: Text(
-                      'iOS Background Mode: Keep bitmsg open for best mesh relay coverage.',
-                      style: TextStyle(fontSize: 12, color: Colors.amber[200]),
+                  const Text(
+                    'BLE Mesh Active',
+                    style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
+                  ),
+                  const Spacer(),
+                  GestureDetector(
+                    onTap: () {
+                      HapticFeedback.selectionClick();
+                      Navigator.of(context).push(
+                        MaterialPageRoute(
+                          builder: (_) => NearbyPeersScreen(
+                            meshService: widget.meshService,
+                          ),
+                        ),
+                      );
+                    },
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 6,
+                      ),
+                      decoration: BoxDecoration(
+                        color: AppTheme.surfaceLight,
+                        borderRadius: BorderRadius.circular(14),
+                        border: Border.all(
+                          color: AppTheme.primaryCyan.withValues(alpha: 0.3),
+                        ),
+                      ),
+                      child: Row(
+                        children: [
+                          const Icon(
+                            Icons.bluetooth_searching,
+                            size: 14,
+                            color: AppTheme.primaryCyan,
+                          ),
+                          const SizedBox(width: 6),
+                          Text(
+                            '$nearbyCount nearby',
+                            style: const TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.bold,
+                              color: AppTheme.primaryCyan,
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
                   ),
                 ],
               ),
             ),
 
-          // Mesh Status Bar
-          Container(
-            margin: const EdgeInsets.all(16),
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-            decoration: BoxDecoration(
-              color: AppTheme.surface,
-              borderRadius: BorderRadius.circular(16),
-              border: Border.all(color: AppTheme.cardBorder),
-            ),
-            child: Row(
-              children: [
-                Container(
-                  width: 10,
-                  height: 10,
-                  decoration: const BoxDecoration(
-                    color: AppTheme.accentMint,
-                    shape: BoxShape.circle,
-                  ),
-                ),
-                const SizedBox(width: 10),
-                const Text(
-                  'BLE Mesh Active',
-                  style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
-                ),
-                const Spacer(),
-                GestureDetector(
-                  onTap: () {
-                    Navigator.of(context).push(
-                      MaterialPageRoute(
-                        builder: (_) => NearbyPeersScreen(meshService: widget.meshService),
+            // Conversation List
+            Expanded(
+              child: _isLoading
+                  ? const Center(
+                      child: CircularProgressIndicator(
+                        color: AppTheme.primaryCyan,
                       ),
-                    );
-                  },
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                    decoration: BoxDecoration(
-                      color: AppTheme.surfaceLight,
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: Row(
+                    )
+                  : ListView(
+                      padding: const EdgeInsets.symmetric(horizontal: 16),
                       children: [
-                        const Icon(Icons.bluetooth_searching,
-                            size: 14, color: AppTheme.primaryCyan),
-                        const SizedBox(width: 6),
-                        Text(
-                          '$nearbyCount nearby',
-                          style: const TextStyle(
-                            fontSize: 12,
-                            fontWeight: FontWeight.bold,
-                            color: AppTheme.primaryCyan,
+                        // Pinned Broadcast Room Tile
+                        _buildConversationTile(
+                          conversationId: 'broadcast',
+                          title: 'Public Broadcast Room',
+                          subtitle: _getLastMessageFor('broadcast') ??
+                              'Open mesh channel for all nearby devices',
+                          isBroadcast: true,
+                          icon: Icons.cell_tower_rounded,
+                        ),
+                        const Divider(color: AppTheme.cardBorder, height: 24),
+                        const Padding(
+                          padding: EdgeInsets.only(left: 4, bottom: 8),
+                          child: Text(
+                            'DIRECT MESSAGES',
+                            style: TextStyle(
+                              fontSize: 11,
+                              fontWeight: FontWeight.bold,
+                              color: Colors.grey,
+                              letterSpacing: 1.2,
+                            ),
                           ),
                         ),
+                        if (_conversations
+                            .where((c) => c['conversationId'] != 'broadcast')
+                            .isEmpty)
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              vertical: 36,
+                              horizontal: 24,
+                            ),
+                            alignment: Alignment.center,
+                            child: Column(
+                              children: [
+                                Icon(
+                                  Icons.chat_bubble_outline_rounded,
+                                  size: 40,
+                                  color: Colors.grey[600],
+                                ),
+                                const SizedBox(height: 12),
+                                Text(
+                                  'No direct messages yet.\nTap "Discover Peers" to start a 1-on-1 chat.',
+                                  textAlign: TextAlign.center,
+                                  style: TextStyle(
+                                    color: Colors.grey[400],
+                                    fontSize: 13,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          )
+                        else
+                          ..._conversations
+                              .where((c) => c['conversationId'] != 'broadcast')
+                              .map((conv) => _buildConversationTile(
+                                    conversationId:
+                                        conv['conversationId'] as String,
+                                    title: conv['peerNickname'] ??
+                                        'Peer: ${conv['conversationId']}',
+                                    subtitle: conv['lastMessage'] ?? '',
+                                    isBroadcast: false,
+                                    icon: Icons.person_rounded,
+                                  )),
                       ],
                     ),
-                  ),
-                ),
-              ],
             ),
-          ),
-
-          // Conversation List
-          Expanded(
-            child: _isLoading
-                ? const Center(child: CircularProgressIndicator(color: AppTheme.primaryCyan))
-                : ListView(
-                    padding: const EdgeInsets.symmetric(horizontal: 16),
-                    children: [
-                      // Pinned Broadcast Room Tile
-                      _buildConversationTile(
-                        conversationId: 'broadcast',
-                        title: 'Public Broadcast Room',
-                        subtitle: _getLastMessageFor('broadcast') ?? 'Open mesh channel for all nearby devices',
-                        isBroadcast: true,
-                        icon: Icons.cell_tower_rounded,
-                      ),
-                      const Divider(color: AppTheme.cardBorder, height: 24),
-                      const Padding(
-                        padding: EdgeInsets.only(left: 4, bottom: 8),
-                        child: Text(
-                          'DIRECT MESSAGES',
-                          style: TextStyle(
-                            fontSize: 11,
-                            fontWeight: FontWeight.bold,
-                            color: Colors.grey,
-                            letterSpacing: 1.2,
-                          ),
-                        ),
-                      ),
-                      if (_conversations.where((c) => c['conversationId'] != 'broadcast').isEmpty)
-                        Container(
-                          padding: const EdgeInsets.all(24),
-                          alignment: Alignment.center,
-                          child: Text(
-                            'No direct messages yet.\nTap "Discover Peers" to start a 1-on-1 chat.',
-                            textAlign: TextAlign.center,
-                            style: TextStyle(color: Colors.grey[500], fontSize: 13),
-                          ),
-                        )
-                      else
-                        ..._conversations
-                            .where((c) => c['conversationId'] != 'broadcast')
-                            .map((conv) => _buildConversationTile(
-                                  conversationId: conv['conversationId'] as String,
-                                  title: conv['peerNickname'] ?? 'Peer: ${conv['conversationId']}',
-                                  subtitle: conv['lastMessage'] ?? '',
-                                  isBroadcast: false,
-                                  icon: Icons.person_rounded,
-                                )),
-                    ],
-                  ),
-          ),
-        ],
+          ],
+        ),
       ),
       floatingActionButton: FloatingActionButton.extended(
         onPressed: () {
+          HapticFeedback.selectionClick();
           Navigator.of(context).push(
             MaterialPageRoute(
-              builder: (_) => NearbyPeersScreen(meshService: widget.meshService),
+              builder: (_) => NearbyPeersScreen(
+                meshService: widget.meshService,
+              ),
             ),
           );
         },
@@ -304,7 +423,9 @@ class _ConversationListScreenState extends State<ConversationListScreen> {
 
   String? _getLastMessageFor(String conversationId) {
     try {
-      final conv = _conversations.firstWhere((c) => c['conversationId'] == conversationId);
+      final conv = _conversations.firstWhere(
+        (c) => c['conversationId'] == conversationId,
+      );
       return conv['lastMessage'] as String?;
     } catch (_) {
       return null;
@@ -318,31 +439,32 @@ class _ConversationListScreenState extends State<ConversationListScreen> {
     required bool isBroadcast,
     required IconData icon,
   }) {
-    final isOnline = isBroadcast || widget.meshService.transport.connectedPeers.contains(conversationId);
+    final isOnline = isBroadcast ||
+        widget.meshService.transport.connectedPeers.contains(conversationId);
 
-    return Card(
-      margin: const EdgeInsets.only(bottom: 8),
+    return Container(
+      margin: const EdgeInsets.only(bottom: 10),
+      decoration: AppTheme.glassDecoration(
+        borderRadius: 16,
+        borderColor: isBroadcast
+            ? AppTheme.primaryPurple.withValues(alpha: 0.3)
+            : AppTheme.cardBorder,
+      ),
       child: ListTile(
-        onTap: () {
-          Navigator.of(context).push(
-            MaterialPageRoute(
-              builder: (_) => ChatScreen(
-                meshService: widget.meshService,
-                conversationId: conversationId,
-                peerNickname: title,
-              ),
-            ),
-          );
-        },
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        onTap: () => _navigateToChat(conversationId, title),
         leading: Stack(
           children: [
             CircleAvatar(
+              radius: 22,
               backgroundColor: isBroadcast
-                  ? AppTheme.primaryPurple.withOpacity(0.2)
-                  : AppTheme.primaryCyan.withOpacity(0.2),
+                  ? AppTheme.primaryPurple.withValues(alpha: 0.2)
+                  : AppTheme.primaryCyan.withValues(alpha: 0.2),
               child: Icon(
                 icon,
-                color: isBroadcast ? AppTheme.primaryPurple : AppTheme.primaryCyan,
+                color: isBroadcast
+                    ? AppTheme.primaryPurple
+                    : AppTheme.primaryCyan,
               ),
             ),
             if (isOnline)
@@ -356,6 +478,12 @@ class _ConversationListScreenState extends State<ConversationListScreen> {
                     color: AppTheme.accentMint,
                     shape: BoxShape.circle,
                     border: Border.all(color: AppTheme.surface, width: 2),
+                    boxShadow: [
+                      BoxShadow(
+                        color: AppTheme.accentMint.withValues(alpha: 0.5),
+                        blurRadius: 4,
+                      ),
+                    ],
                   ),
                 ),
               ),
@@ -371,7 +499,11 @@ class _ConversationListScreenState extends State<ConversationListScreen> {
           overflow: TextOverflow.ellipsis,
           style: TextStyle(color: Colors.grey[400], fontSize: 13),
         ),
-        trailing: const Icon(Icons.chevron_right_rounded, color: Colors.grey),
+        trailing: const Icon(
+          Icons.chevron_right_rounded,
+          color: Colors.grey,
+          size: 20,
+        ),
       ),
     );
   }
