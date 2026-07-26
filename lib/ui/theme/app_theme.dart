@@ -2,15 +2,15 @@ import 'package:flutter/material.dart';
 
 /// Cyberpunk / Modern Dark Mesh design system for bitmsg.
 class AppTheme {
-  static const Color background = Color(0xFF080C14);
-  static const Color surface = Color(0xFF111827);
-  static const Color surfaceLight = Color(0xFF1F2937);
-  static const Color cardBorder = Color(0xFF374151);
+  static const Color background = Color(0xFF070B12);
+  static const Color surface = Color(0xFF0F172A);
+  static const Color surfaceLight = Color(0xFF1E293B);
+  static const Color cardBorder = Color(0xFF334155);
 
   static const Color primaryCyan = Color(0xFF00F2FE);
   static const Color primaryPurple = Color(0xFF9D50BB);
   static const Color accentMint = Color(0xFF10B981);
-  static const Color accentAmber = Color(0xFBF59E0B);
+  static const Color accentAmber = Color(0xFFF59E0B);
   static const Color accentRose = Color(0xFFF43F5E);
 
   static const LinearGradient primaryGradient = LinearGradient(
@@ -18,6 +18,47 @@ class AppTheme {
     begin: Alignment.topLeft,
     end: Alignment.bottomRight,
   );
+
+  static const LinearGradient surfaceGradient = LinearGradient(
+    colors: [Color(0xFF1E293B), Color(0xFF0F172A)],
+    begin: Alignment.topCenter,
+    end: Alignment.bottomCenter,
+  );
+
+  static List<BoxShadow> cyanGlow({double blur = 12, double opacity = 0.3}) => [
+        BoxShadow(
+          color: primaryCyan.withValues(alpha: opacity),
+          blurRadius: blur,
+          spreadRadius: 1,
+        ),
+      ];
+
+  static List<BoxShadow> purpleGlow({double blur = 12, double opacity = 0.3}) => [
+        BoxShadow(
+          color: primaryPurple.withValues(alpha: opacity),
+          blurRadius: blur,
+          spreadRadius: 1,
+        ),
+      ];
+
+  static BoxDecoration glassDecoration({
+    Color? color,
+    Color borderColor = cardBorder,
+    double borderRadius = 16,
+  }) {
+    return BoxDecoration(
+      color: color ?? surface.withValues(alpha: 0.7),
+      borderRadius: BorderRadius.circular(borderRadius),
+      border: Border.all(color: borderColor.withValues(alpha: 0.6), width: 1),
+      boxShadow: [
+        BoxShadow(
+          color: Colors.black.withValues(alpha: 0.25),
+          blurRadius: 16,
+          spreadRadius: -2,
+        ),
+      ],
+    );
+  }
 
   static ThemeData get darkTheme {
     return ThemeData(
@@ -29,7 +70,6 @@ class AppTheme {
         primary: primaryCyan,
         secondary: primaryPurple,
         surface: surface,
-        background: background,
         error: accentRose,
       ),
       appBarTheme: const AppBarTheme(
@@ -54,6 +94,7 @@ class AppTheme {
       floatingActionButtonTheme: const FloatingActionButtonThemeData(
         backgroundColor: primaryCyan,
         foregroundColor: Colors.black,
+        elevation: 4,
       ),
       inputDecorationTheme: InputDecorationTheme(
         filled: true,
