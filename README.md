@@ -1,10 +1,15 @@
 # bitmsg — Offline Bluetooth Mesh Messaging App
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
+[![Flutter](https://img.shields.io/badge/Flutter-3.10.1+-02569B?logo=flutter)](https://flutter.dev/)
+
+> **Disclaimer:** This project was created primarily for **educational purposes** to demonstrate offline mesh networking, BLE (Bluetooth Low Energy) communication, and cryptographic implementations in a Flutter mobile application. It is not intended for mission-critical or highly-sensitive deployments without thorough independent security audits.
+
 **bitmsg** is a cross-platform (Android & iOS) Flutter application that enables nearby devices to exchange end-to-end encrypted text messages completely offline using Bluetooth Low Energy (BLE) as transport and a store-and-forward mesh relay protocol.
 
 ---
 
-## Key Features
+## 🚀 Key Features
 
 - **100% Offline & Serverless**: No internet, cell tower, account, or central server required.
 - **Cryptographic Identity**: Generates Ed25519 signing keypairs and X25519 encryption keypairs locally on first launch.
@@ -19,9 +24,9 @@
 
 ---
 
-## Architecture Overview
+## 🏗️ Architecture Overview
 
-```
+```text
  ┌─────────────────────────────────────────────────────────┐
  │                       Flutter UI                        │
  │  (Onboarding, Conversations, Chat, Discovery, Diagnostics) │
@@ -43,7 +48,7 @@
 
 ---
 
-## Getting Started
+## 🛠️ Getting Started
 
 ### Prerequisites
 - Flutter SDK 3.10.1 or newer
@@ -68,7 +73,7 @@ flutter run -d <ios-device-id>
 
 ---
 
-## Known Platform Limitations & Best Practices
+## ⚠️ Known Platform Limitations & Best Practices
 
 1. **BLE Transmission Range**: Typical indoor BLE range is ~10–30 meters (up to 50m line-of-sight outdoors).
 2. **iOS Background Constraints**:
@@ -77,3 +82,30 @@ flutter run -d <ios-device-id>
    - **Recommendation**: Keep the app open/foregrounded for optimal mesh relay performance.
 3. **Android Battery Optimization**: On Android 12+, turn off OS battery optimization for bitmsg so `BleForegroundService` runs continuously.
 4. **Physical Device Testing**: BLE cannot be tested on emulators or simulators; use real hardware.
+
+---
+
+## 🤝 Contributing
+
+We welcome contributions! As this is an educational project, we encourage students, developers, and security enthusiasts to read the code, suggest improvements, and submit pull requests.
+
+### How to Contribute:
+1. **Fork the Repository**
+2. **Create a Feature Branch** (`git checkout -b feature/AmazingFeature`)
+3. **Commit your Changes** (`git commit -m 'Add some AmazingFeature'`)
+4. **Push to the Branch** (`git push origin feature/AmazingFeature`)
+5. **Open a Pull Request**
+
+### Areas for Contribution:
+- Implementing cross-platform background execution optimizations.
+- Improving the mesh routing protocol (e.g., beyond simple TTL-flooding).
+- Expanding unit and integration tests.
+- Auditing the cryptographic implementations.
+
+Please ensure your code passes all existing tests (`flutter test`) and adheres to the project's formatting standards (`flutter format .`).
+
+---
+
+## 📝 License
+
+This project is open-sourced under the [MIT License](LICENSE). 
