@@ -12,6 +12,14 @@
 ## 🚀 Key Features
 
 - **100% Offline & Serverless**: No internet, cell tower, account, or central server required.
+- **🚨 Offline Disaster & Crisis Supply System**: Built for natural crises and emergency relief. Broadcast and filter critical supply needs and offers:
+  - 💊 **Medical & First Aid** (medicines, insulin, bandages, doctor needed)
+  - 🥫 **Food & Rations** (canned goods, baby food, ready meals)
+  - 💧 **Drinking Water** (potable water, purification tablets)
+  - ⛺ **Shelter & Warmth** (tents, blankets, dry clothing)
+  - 🆘 **Search & Rescue** (trapped survivors, flood evacuation)
+  - ⚡ **Power & Lighting** (batteries, flashlights, generators)
+- **1-Tap Quick SOS Beacon**: Instant high-priority broadcast for life-threatening emergencies with affected count and location landmarks.
 - **Cryptographic Identity**: Generates Ed25519 signing keypairs and X25519 encryption keypairs locally on first launch.
 - **End-to-End Encryption (E2E)**: Direct messages are encrypted using X25519 ECDH key agreement + ChaCha20-Poly1305 AEAD.
 - **Mesh Relay Protocol**: Devices act as both BLE Centrals (scanners/clients) and Peripherals (advertisers/GATT servers). Messages hop through intermediate devices (TTL-based flooding) to reach peers out of direct range.
@@ -61,7 +69,7 @@
 # Fetch dependencies
 flutter pub get
 
-# Run unit and integration tests (43 tests)
+# Run unit and integration tests (50 tests)
 flutter test
 
 # Run on an Android device

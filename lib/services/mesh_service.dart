@@ -8,6 +8,7 @@ import '../protocol/cache/dedup_cache.dart';
 import '../protocol/crypto/mesh_crypto.dart';
 import '../protocol/identity/identity_storage.dart';
 import '../protocol/identity/mesh_identity.dart';
+import '../protocol/models/crisis_supply_payload.dart';
 import '../protocol/models/message_envelope.dart';
 import '../protocol/relay/relay_engine.dart';
 import '../protocol/serialization/envelope_serializer.dart';
@@ -492,6 +493,74 @@ class MeshService extends ChangeNotifier {
     } catch (e) {
       debugPrint('Legacy peer cleanup error: $e');
     }
+  }
+
+  /// Broadcasts a structured natural crisis supply request or offer over the mesh.
+  Future<StoredMessage> broadcastCrisisSupply(CrisisSupplyPayload payload) async {
+    final body = payload.toEncodedMessage();
+    return await sendMessage(
+      recipientId: null, // Broadcast to all nearby mesh devices
+      body: body,
+    );
+  }
+
+  /// Broadcasts an immediate Critical SOS Beacon over the mesh.
+  Future<StoredMessage> broadcastQuickSos({
+    required String location,
+    required String details,
+    int adultsCount = 1,
+    int childrenCount = 0,
+    int injuredCount = 0,
+    List<String> neededItems = const [],
+  }) async {
+    if (_currentIdentity == null) {
+      throw StateError('Identity not initialized');
+    }
+
+    final payload = CrisisSupplyPayload.create(
+      type: CrisisRequestType.request,
+      category: DisasterSupplyCategory.rescue,
+      title: 'EMERGENCY SOS: Immediate Rescue & Assistance Needed',
+      details: details.isNotEmpty ? details : 'Immediate emergency assistance required.',
+      urgency: CrisisUrgency.critical,
+      adultsCount: adultsCount,
+      childrenCount: childrenCount,
+      injuredCount: injuredCount,
+      locationDescription: location,
+      contactName: _currentIdentity!.nickname ?? 'Survivor-${_currentIdentity!.deviceId.substring(0, 4)}',
+      senderId: _currentIdentity!.deviceId,
+      neededItems: neededItems.isNotEmpty ? neededItems : ['Emergency Rescue', 'Medical Aid'],
+    );
+
+    return await broadcastCrisisSupply(payload);
+  }
+
+  /// Retrieves all crisis beacons from the mesh message history.
+  Future<List<CrisisSupplyPayload>> getCrisisBeacons() async {
+    final broadcastMessages = await messageRepo.getConversationHistory('broadcast');
+    final Map<String, CrisisSupplyPayload> beaconsById = {};
+
+    for (final msg in broadcastMessages) {
+      final parsed = CrisisSupplyPayload.tryParse(msg.body);
+      if (parsed != null) {
+        // Keep the latest beacon state by ID
+        beaconsById[parsed.id] = parsed;
+      }
+    }
+
+    final list = beaconsById.values.toList();
+    // Sort: Critical beacons first, then descending by timestamp
+    list.sort((a, b) {
+      if (a.urgency == CrisisUrgency.critical && b.urgency != CrisisUrgency.critical) {
+        return -1;
+      }
+      if (b.urgency == CrisisUrgency.critical && a.urgency != CrisisUrgency.critical) {
+        return 1;
+      }
+      return b.timestamp.compareTo(a.timestamp);
+    });
+
+    return list;
   }
 
   /// Diagnostics metadata summary.

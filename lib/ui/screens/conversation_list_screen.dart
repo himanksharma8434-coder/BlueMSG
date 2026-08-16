@@ -3,9 +3,12 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../../protocol/models/crisis_supply_payload.dart';
 import '../../services/mesh_service.dart';
 import '../theme/app_theme.dart';
+import '../widgets/crisis_supply_dialog.dart';
 import 'chat_screen.dart';
+import 'crisis_hub_screen.dart';
 import 'diagnostics_screen.dart';
 import 'nearby_peers_screen.dart';
 
@@ -21,6 +24,7 @@ class ConversationListScreen extends StatefulWidget {
 class _ConversationListScreenState extends State<ConversationListScreen>
     with SingleTickerProviderStateMixin {
   List<Map<String, dynamic>> _conversations = [];
+  List<CrisisSupplyPayload> _crisisBeacons = [];
   bool _isLoading = true;
 
   late AnimationController _pulseController;
@@ -50,13 +54,18 @@ class _ConversationListScreenState extends State<ConversationListScreen>
 
   Future<void> _loadConversations() async {
     final list = await widget.meshService.messageRepo.getConversationList();
+    final beacons = await widget.meshService.getCrisisBeacons();
     if (mounted) {
       setState(() {
         _conversations = list;
+        _crisisBeacons = beacons;
         _isLoading = false;
       });
     }
   }
+
+  int get _criticalCount =>
+      _crisisBeacons.where((b) => b.urgency == CrisisUrgency.critical).length;
 
   void _editNicknameDialog() {
     final controller = TextEditingController(
@@ -189,6 +198,27 @@ class _ConversationListScreenState extends State<ConversationListScreen>
         ),
         actions: [
           IconButton(
+            icon: Badge(
+              isLabelVisible: _criticalCount > 0,
+              backgroundColor: AppTheme.sosRed,
+              label: Text('$_criticalCount'),
+              child: const Icon(
+                Icons.health_and_safety_rounded,
+                color: AppTheme.sosRed,
+              ),
+            ),
+            tooltip: 'Crisis & SOS Relief Hub',
+            onPressed: () {
+              HapticFeedback.selectionClick();
+              Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (_) =>
+                      CrisisHubScreen(meshService: widget.meshService),
+                ),
+              );
+            },
+          ),
+          IconButton(
             icon: const Icon(Icons.tune_rounded),
             tooltip: 'Mesh Diagnostics',
             onPressed: () {
@@ -212,6 +242,150 @@ class _ConversationListScreenState extends State<ConversationListScreen>
         },
         child: Column(
           children: [
+            // Critical Emergency Banner (if any active in mesh)
+            if (_criticalCount > 0)
+              GestureDetector(
+                onTap: () {
+                  HapticFeedback.selectionClick();
+                  Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (_) =>
+                          CrisisHubScreen(meshService: widget.meshService),
+                    ),
+                  );
+                },
+                child: Container(
+                  margin:
+                      const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: AppTheme.sosRed.withValues(alpha: 0.2),
+                    borderRadius: BorderRadius.circular(14),
+                    border: Border.all(color: AppTheme.sosRed, width: 1.5),
+                    boxShadow: AppTheme.sosGlow(blur: 8, opacity: 0.3),
+                  ),
+                  child: Row(
+                    children: [
+                      const Icon(Icons.warning_amber_rounded,
+                          color: AppTheme.sosRed, size: 22),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Text(
+                          '🚨 $_criticalCount CRITICAL SOS BEACON(S) IN MESH!\nTap to open Disaster & SOS Hub',
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 12,
+                            fontWeight: FontWeight.bold,
+                            height: 1.3,
+                          ),
+                        ),
+                      ),
+                      const Icon(Icons.arrow_forward_ios_rounded,
+                          color: AppTheme.sosRed, size: 14),
+                    ],
+                  ),
+                ),
+              ),
+
+            // Disaster Relief & SOS Hub Hero Card
+            Container(
+              margin: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
+                gradient: const LinearGradient(
+                  colors: [Color(0xFF24101A), Color(0xFF101E2E)],
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                ),
+                borderRadius: BorderRadius.circular(18),
+                border: Border.all(
+                  color: AppTheme.sosRed.withValues(alpha: 0.4),
+                  width: 1.2,
+                ),
+              ),
+              child: Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(
+                      gradient: AppTheme.sosGradient,
+                      borderRadius: BorderRadius.circular(14),
+                      boxShadow: AppTheme.sosGlow(blur: 8, opacity: 0.3),
+                    ),
+                    child: const Icon(
+                      Icons.health_and_safety_rounded,
+                      color: Colors.white,
+                      size: 24,
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text(
+                          'Disaster & SOS Hub',
+                          style: TextStyle(
+                            fontWeight: FontWeight.bold,
+                            fontSize: 15,
+                            color: Colors.white,
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          'Offline Supplies: Medic, Food, Water, Shelter, Rescue, Power',
+                          style: TextStyle(
+                            fontSize: 11,
+                            color: Colors.grey[300],
+                          ),
+                        ),
+                        if (_crisisBeacons.isNotEmpty) ...[
+                          const SizedBox(height: 4),
+                          Text(
+                            '${_crisisBeacons.length} active relief beacons in range',
+                            style: const TextStyle(
+                              fontSize: 11,
+                              fontWeight: FontWeight.bold,
+                              color: AppTheme.primaryCyan,
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  ElevatedButton(
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: AppTheme.sosRed,
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 12, vertical: 8),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                    ),
+                    onPressed: () {
+                      HapticFeedback.selectionClick();
+                      Navigator.of(context).push(
+                        MaterialPageRoute(
+                          builder: (_) =>
+                              CrisisHubScreen(meshService: widget.meshService),
+                        ),
+                      );
+                    },
+                    child: const Text(
+                      'OPEN HUB',
+                      style: TextStyle(
+                        fontWeight: FontWeight.w900,
+                        fontSize: 11,
+                        letterSpacing: 0.5,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+
             // iOS Background Warning Banner
             if (!kIsWeb && Platform.isIOS)
               Container(
@@ -233,7 +407,8 @@ class _ConversationListScreenState extends State<ConversationListScreen>
                     Expanded(
                       child: Text(
                         'iOS Background Mode: Keep bitmsg open for best mesh relay coverage.',
-                        style: TextStyle(fontSize: 12, color: Colors.amber[200]),
+                        style:
+                            TextStyle(fontSize: 12, color: Colors.amber[200]),
                       ),
                     ),
                   ],
@@ -426,7 +601,14 @@ class _ConversationListScreenState extends State<ConversationListScreen>
       final conv = _conversations.firstWhere(
         (c) => c['conversationId'] == conversationId,
       );
-      return conv['lastMessage'] as String?;
+      final last = conv['lastMessage'] as String?;
+      if (last == null) return null;
+      final parsed = CrisisSupplyPayload.tryParse(last);
+      if (parsed != null) {
+        final tag = parsed.type == CrisisRequestType.request ? 'NEED' : 'OFFER';
+        return '${parsed.category.emoji} [$tag] ${parsed.title}';
+      }
+      return last;
     } catch (_) {
       return null;
     }
