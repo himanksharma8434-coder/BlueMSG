@@ -110,17 +110,18 @@ class _OnboardingScreenState extends State<OnboardingScreen>
                 const SizedBox(height: 12),
                 // App Logo with glowing shadow
                 Container(
-                  width: 72,
-                  height: 72,
+                  width: 80,
+                  height: 80,
                   decoration: BoxDecoration(
-                    gradient: AppTheme.primaryGradient,
-                    borderRadius: BorderRadius.circular(22),
-                    boxShadow: AppTheme.cyanGlow(blur: 16, opacity: 0.4),
+                    borderRadius: BorderRadius.circular(24),
+                    boxShadow: AppTheme.cyanGlow(blur: 18, opacity: 0.45),
                   ),
-                  child: const Icon(
-                    Icons.hub_rounded,
-                    size: 40,
-                    color: Colors.black,
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(24),
+                    child: Image.asset(
+                      'assets/images/app_logo.png',
+                      fit: BoxFit.cover,
+                    ),
                   ),
                 ),
                 const SizedBox(height: 16),
