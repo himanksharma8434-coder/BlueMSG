@@ -32,7 +32,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('Welcome to bitmsg'), findsOneWidget);
-    expect(find.text('CHOOSE YOUR DISPLAY USERNAME'), findsOneWidget);
+    expect(find.text('CHOOSE YOUR DISPLAY NAME'), findsOneWidget);
     expect(find.text('Join Mesh Network'), findsOneWidget);
   });
 }

@@ -13,8 +13,29 @@ class AppTheme {
   static const Color accentAmber = Color(0xFFF59E0B);
   static const Color accentRose = Color(0xFFF43F5E);
 
+  // Disaster Crisis & Relief Colors
+  static const Color sosRed = Color(0xFFFF334B);
+  static const Color sosOrange = Color(0xFFFF8800);
+  static const Color medicalCyan = Color(0xFF00E5FF);
+  static const Color foodAmber = Color(0xFFFFB300);
+  static const Color waterBlue = Color(0xFF00B0FF);
+  static const Color shelterEmerald = Color(0xFF00E676);
+  static const Color powerPurple = Color(0xFFE040FB);
+
   static const LinearGradient primaryGradient = LinearGradient(
     colors: [primaryCyan, primaryPurple],
+    begin: Alignment.topLeft,
+    end: Alignment.bottomRight,
+  );
+
+  static const LinearGradient sosGradient = LinearGradient(
+    colors: [sosRed, sosOrange],
+    begin: Alignment.topLeft,
+    end: Alignment.bottomRight,
+  );
+
+  static const LinearGradient medicalGradient = LinearGradient(
+    colors: [Color(0xFF00E5FF), Color(0xFF0072FF)],
     begin: Alignment.topLeft,
     end: Alignment.bottomRight,
   );
@@ -36,6 +57,14 @@ class AppTheme {
   static List<BoxShadow> purpleGlow({double blur = 12, double opacity = 0.3}) => [
         BoxShadow(
           color: primaryPurple.withValues(alpha: opacity),
+          blurRadius: blur,
+          spreadRadius: 1,
+        ),
+      ];
+
+  static List<BoxShadow> sosGlow({double blur = 14, double opacity = 0.4}) => [
+        BoxShadow(
+          color: sosRed.withValues(alpha: opacity),
           blurRadius: blur,
           spreadRadius: 1,
         ),

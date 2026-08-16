@@ -2,9 +2,13 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../../protocol/models/crisis_supply_payload.dart';
 import '../../services/mesh_service.dart';
 import '../../storage/models/stored_message.dart';
 import '../theme/app_theme.dart';
+import '../widgets/crisis_beacon_card.dart';
+import '../widgets/crisis_supply_dialog.dart';
+import 'crisis_hub_screen.dart';
 
 class ChatScreen extends StatefulWidget {
   final MeshService meshService;
@@ -174,6 +178,24 @@ class _ChatScreenState extends State<ChatScreen> {
             ),
           ],
         ),
+        actions: [
+          IconButton(
+            icon: const Icon(
+              Icons.health_and_safety_rounded,
+              color: AppTheme.sosRed,
+            ),
+            tooltip: 'Crisis & SOS Relief Hub',
+            onPressed: () {
+              HapticFeedback.selectionClick();
+              Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (_) =>
+                      CrisisHubScreen(meshService: widget.meshService),
+                ),
+              );
+            },
+          ),
+        ],
       ),
       body: Stack(
         children: [
@@ -268,8 +290,8 @@ class _ChatScreenState extends State<ChatScreen> {
               // Message Input Bar
               Container(
                 padding: const EdgeInsets.symmetric(
-                  horizontal: 16,
-                  vertical: 12,
+                  horizontal: 12,
+                  vertical: 10,
                 ),
                 decoration: const BoxDecoration(
                   color: AppTheme.surface,
@@ -277,6 +299,31 @@ class _ChatScreenState extends State<ChatScreen> {
                 ),
                 child: Row(
                   children: [
+                    IconButton(
+                      icon: Container(
+                        padding: const EdgeInsets.all(6),
+                        decoration: const BoxDecoration(
+                          color: AppTheme.surfaceLight,
+                          shape: BoxShape.circle,
+                        ),
+                        child: const Icon(
+                          Icons.add_alert_rounded,
+                          color: AppTheme.sosRed,
+                          size: 18,
+                        ),
+                      ),
+                      tooltip: 'Request / Offer Supplies (SOS)',
+                      onPressed: () {
+                        HapticFeedback.selectionClick();
+                        showDialog(
+                          context: context,
+                          builder: (_) => CrisisSupplyDialog(
+                            meshService: widget.meshService,
+                          ),
+                        ).then((_) => _loadHistory());
+                      },
+                    ),
+                    const SizedBox(width: 4),
                     Expanded(
                       child: TextField(
                         controller: _textController,
@@ -288,24 +335,26 @@ class _ChatScreenState extends State<ChatScreen> {
                             color: Colors.grey[500],
                             fontSize: 14,
                           ),
+                          contentPadding: const EdgeInsets.symmetric(
+                              horizontal: 16, vertical: 12),
                         ),
                         onSubmitted: (_) => _sendMessage(),
                       ),
                     ),
-                    const SizedBox(width: 10),
+                    const SizedBox(width: 8),
                     Container(
-                      width: 48,
-                      height: 48,
+                      width: 44,
+                      height: 44,
                       decoration: BoxDecoration(
                         gradient: AppTheme.primaryGradient,
                         shape: BoxShape.circle,
-                        boxShadow: AppTheme.cyanGlow(blur: 10, opacity: 0.3),
+                        boxShadow: AppTheme.cyanGlow(blur: 8, opacity: 0.3),
                       ),
                       child: IconButton(
                         icon: const Icon(
                           Icons.send_rounded,
                           color: Colors.black,
-                          size: 20,
+                          size: 18,
                         ),
                         onPressed: _sendMessage,
                       ),
@@ -334,6 +383,19 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   Widget _buildMessageBubble(StoredMessage msg) {
+    final parsedCrisis = CrisisSupplyPayload.tryParse(msg.body);
+    if (parsedCrisis != null) {
+      return Padding(
+        padding: const EdgeInsets.only(bottom: 12),
+        child: CrisisBeaconCard(
+          beacon: parsedCrisis,
+          meshService: widget.meshService,
+          compact: true,
+          onUpdated: _loadHistory,
+        ),
+      );
+    }
+
     final isMe = msg.direction == MessageDirection.outgoing;
 
     return Align(
